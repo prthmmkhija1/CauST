@@ -1,0 +1,43 @@
+# experiments/configs/mousebrain_caust_stagate.yaml
+# -----------------------------------------------------------
+# Config for: Mouse Brain dataset with CauST + STAGATE
+# -----------------------------------------------------------
+
+dataset:
+  name: MouseBrain
+  processed_path: data/processed/MouseBrain/mouse_brain.h5ad
+  ground_truth_key: null # no manual annotation; use Silhouette only
+  n_clusters: 10 # approximately 10 cortical regions
+
+preprocessing:
+  n_top_genes: 3000
+  min_cells: 5
+  min_genes: 200
+
+model:
+  hidden_dim: 512
+  latent_dim: 30
+  epochs: 500
+  lr: 0.001
+
+causal:
+  scoring_method: perturbation
+  intervention: mean_impute
+  n_causal_genes: 500
+  alpha: 0.5
+
+filter:
+  mode: filter_and_reweight
+  k: 500
+
+downstream:
+  method: STAGATE # swap to "GraphST" or "CauST-internal"
+  n_neighbors: 6
+
+evaluation:
+  metrics: [silhouette] # no ground truth -> silhouette only
+  save_csv: true
+
+output:
+  results_dir: experiments/results/mousebrain/
+  figures_dir: experiments/results/figures/

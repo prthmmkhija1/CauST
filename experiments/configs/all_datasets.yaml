@@ -1,0 +1,82 @@
+# experiments/configs/all_datasets.yaml
+# -----------------------------------------------------------
+# Config for: running CauST across all 5 datasets
+# Use with scripts 03-06
+# -----------------------------------------------------------
+
+datasets:
+  - name: DLPFC
+    processed_dir: data/processed/DLPFC/
+    ground_truth_key: layer_guess
+    n_clusters: 7
+    slices:
+      [
+        "151507",
+        "151508",
+        "151509",
+        "151510",
+        "151669",
+        "151670",
+        "151671",
+        "151672",
+        "151673",
+        "151674",
+        "151675",
+        "151676",
+      ]
+    donor_map:
+      "151507": Donor1
+      "151508": Donor1
+      "151509": Donor1
+      "151510": Donor1
+      "151669": Donor2
+      "151670": Donor2
+      "151671": Donor2
+      "151672": Donor2
+      "151673": Donor3
+      "151674": Donor3
+      "151675": Donor3
+      "151676": Donor3
+
+  - name: MouseBrain
+    processed_path: data/processed/MouseBrain/mouse_brain.h5ad
+    ground_truth_key: null
+    n_clusters: 10
+
+  - name: MouseOB
+    processed_path: data/processed/MouseOB/mouse_ob.h5ad
+    ground_truth_key: null
+    n_clusters: 7
+
+  - name: HumanBreastCancer
+    processed_path: data/processed/HumanBreastCancer/breast_cancer.h5ad
+    ground_truth_key: null
+    n_clusters: 20
+
+  - name: STARmap
+    processed_path: data/processed/STARmap/starmap.h5ad
+    ground_truth_key: null
+    n_clusters: 7
+
+preprocessing:
+  n_top_genes: 3000
+  min_cells: 5
+  min_genes: 200
+
+model:
+  hidden_dim: 512
+  latent_dim: 30
+  epochs: 500
+  lr: 0.001
+
+causal:
+  scoring_method: perturbation
+  intervention: mean_impute
+  n_causal_genes: 500
+  alpha: 0.5
+
+filter:
+  mode: filter_and_reweight
+
+evaluation:
+  metrics: [ari, nmi, silhouette]

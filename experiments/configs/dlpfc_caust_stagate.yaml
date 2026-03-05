@@ -1,0 +1,47 @@
+# experiments/configs/dlpfc_caust_stagate.yaml
+# -----------------------------------------------------------
+# Config for: CauST gene filtering + STAGATE downstream
+# Requires: pip install stagate_pyg
+# -----------------------------------------------------------
+
+dataset:
+  name: DLPFC
+  processed_dir: data/processed/DLPFC/
+  ground_truth_key: layer_guess
+  n_clusters: 7
+  slices:
+    - "151507"
+    - "151508"
+    - "151509"
+    - "151510"
+
+preprocessing:
+  n_top_genes: 3000
+  min_cells: 5
+  min_genes: 200
+
+causal:
+  enabled: true
+  scoring_method: perturbation
+  intervention: mean_impute
+  n_causal_genes: 500
+  alpha: 0.5
+
+filter:
+  mode: filter_and_reweight
+  k: 500
+
+downstream:
+  method: STAGATE # Run STAGATE on CauST-filtered features
+  n_pcs: 15
+  n_neighbors: 6
+  mclust_model: EEE # mclust model string for R mclust
+
+evaluation:
+  metrics: [ari, nmi, silhouette]
+  save_csv: true
+  compare_with_baseline: true # also run STAGATE on raw HVG for comparison
+
+output:
+  results_dir: experiments/results/caust_stagate/
+  figures_dir: experiments/results/figures/

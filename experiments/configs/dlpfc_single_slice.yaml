@@ -1,0 +1,44 @@
+# experiments/configs/dlpfc_single_slice.yaml
+# -----------------------------------------------------------
+# Config for: single-slice DLPFC experiment (151507)
+# Run with: python scripts/03_train_single_slice.py
+# -----------------------------------------------------------
+
+dataset:
+  name: DLPFC
+  slice_id: "151507"
+  raw_path: data/raw/DLPFC/151507/
+  processed_path: data/processed/DLPFC/151507.h5ad
+  ground_truth_key: layer_guess # obs column with annotated cortical layers
+  n_clusters: 7 # 6 cortical layers + white matter
+
+preprocessing:
+  n_top_genes: 3000 # highly variable genes to select
+  min_cells: 5 # filter genes expressed in fewer cells
+  min_genes: 200 # filter spots with fewer detected genes
+
+model:
+  hidden_dim: 512 # hidden layer size in GAT encoder
+  latent_dim: 30 # embedding dimension (spatial domain space)
+  heads: 1 # GAT attention heads
+  epochs: 500
+  lr: 0.001
+  batch_size: full # use all spots at once (full graph)
+
+causal:
+  scoring_method: perturbation # "perturbation" or "gradient"
+  intervention: mean_impute # do(G = E[G]) for each gene G
+  n_causal_genes: 500 # how many top causal genes to keep
+
+filter:
+  mode: filter_and_reweight # "filter_top_k" | "reweight" | "filter_and_reweight"
+  k: 500 # used only by filter_top_k and filter_and_reweight
+
+evaluation:
+  metrics: [ari, nmi, silhouette]
+  save_csv: true
+
+output:
+  model_dir: experiments/models/151507/
+  results_dir: experiments/results/single_slice/
+  figures_dir: experiments/results/figures/

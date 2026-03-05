@@ -1,0 +1,65 @@
+# ── Data ──────────────────────────────────────────────────────
+data/raw/
+data/processed/
+*.h5ad
+*.h5
+*.loom
+
+# ── Experiment outputs ────────────────────────────────────────
+experiments/results/
+experiments/models/
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+pip-wheel-metadata/
+.installed.cfg
+*.spec
+
+# ── Virtual environments ──────────────────────────────────────
+env/
+venv/
+.venv/
+ENV/
+.conda/
+
+# ── Jupyter ───────────────────────────────────────────────────
+.ipynb_checkpoints/
+# NOTE: do NOT gitignore *.ipynb — tutorials/ notebooks must be tracked
+
+# ── IDE / editor ──────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs / caches ─────────────────────────────────────────────
+*.log
+*.tmp
+.cache/
+wandb/
+mlruns/
+
+# ── PyTorch checkpoints (keep only tracked ones) ──────────────
+*.pt
+*.pth
+
+# ── Pytest ────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/

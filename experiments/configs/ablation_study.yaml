@@ -1,0 +1,70 @@
+# experiments/configs/ablation_study.yaml
+# -----------------------------------------------------------
+# Config for: full ablation study (05_benchmark.py)
+# Tests all variant × method × dataset combinations
+# -----------------------------------------------------------
+
+datasets:
+  - name: DLPFC
+    processed_dir: data/processed/DLPFC/
+    ground_truth_key: layer_guess
+    n_clusters: 7
+    slices: ["151507", "151508", "151509", "151510"] # first 4 for speed
+
+  - name: MouseBrain
+    processed_path: data/processed/MouseBrain/mouse_brain.h5ad
+    ground_truth_key: null
+    n_clusters: 10
+
+  - name: MouseOB
+    processed_path: data/processed/MouseOB/mouse_ob.h5ad
+    ground_truth_key: null
+    n_clusters: 7
+
+  - name: HumanBreastCancer
+    processed_path: data/processed/HumanBreastCancer/breast_cancer.h5ad
+    ground_truth_key: null
+    n_clusters: 20
+
+  - name: STARmap
+    processed_path: data/processed/STARmap/starmap.h5ad
+    ground_truth_key: null
+    n_clusters: 7
+
+preprocessing:
+  n_top_genes: 3000
+
+model:
+  hidden_dim: 512
+  latent_dim: 30
+  epochs: 500
+  lr: 0.001
+
+causal:
+  scoring_method: perturbation
+  intervention: mean_impute
+  n_causal_genes: 500
+
+ablation_variants:
+  # Each variant changes one component; all others use defaults
+  - name: Baseline
+    filter_mode: none # raw HVG, no causal component
+  - name: CauST-Filter
+    filter_mode: filter # top-K gene subset only
+  - name: CauST-Reweight
+    filter_mode: reweight # expression reweighting only
+  - name: CauST-Full
+    filter_mode: filter_and_reweight # both (the default CauST)
+
+downstream_methods:
+  - CauST-internal # CauST's own GAT-based clustering
+  - STAGATE # requires stagate_pyg
+  - GraphST # requires GraphST
+
+evaluation:
+  metrics: [ari, nmi, silhouette]
+  save_csv: true
+  output_csv: experiments/results/benchmark/all_results.csv
+
+output:
+  figures_dir: experiments/results/figures/
