@@ -88,11 +88,22 @@ if __name__ == "__main__":
     for dataset in ["DLPFC", "MouseBrain", "MouseOB", "HumanBreastCancer", "STARmap"]:
         raw_dir = RAW / dataset
         out_dir = PROC / dataset
-        if raw_dir.exists():
-            print(f"\n{'─'*40}\nDataset: {dataset}")
-            n = process_directory(raw_dir, out_dir)
-            print(f"  {n} file(s) processed → {out_dir}")
-        else:
-            print(f"\n[skip] {raw_dir} not found. Run 01_download_data.py first.")
+        print(f"\n{'─'*40}\nDataset: {dataset}")
+
+        # Files already placed directly in data/processed/ (e.g. via squidpy)
+        raw_files = list(raw_dir.glob("**/*.h5ad")) + list(raw_dir.glob("**/*.h5")) \
+            if raw_dir.exists() else []
+        proc_files = list(out_dir.glob("**/*.h5ad")) if out_dir.exists() else []
+
+        if not raw_files and proc_files:
+            print(f"  [ok] {len(proc_files)} file(s) already in {out_dir} — skipping re-processing.")
+            continue
+
+        if not raw_files:
+            print(f"  [skip] No files found in {raw_dir}. Run 01_download_data.py first.")
+            continue
+
+        n = process_directory(raw_dir, out_dir)
+        print(f"  {n} file(s) processed → {out_dir}")
 
     print("\n✓ Preprocessing complete. Files in data/processed/")
