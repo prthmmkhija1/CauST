@@ -31,11 +31,24 @@ NOTE: DLPFC requires anndata / squidpy helpers to fetch.
 
 import os
 import sys
+import tarfile
 import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA_RAW = ROOT / "data" / "raw"
+
+try:
+    import squidpy as sq
+    _HAS_SQ = True
+except ImportError:
+    _HAS_SQ = False
+
+try:
+    import scanpy as sc
+    _HAS_SC = True
+except ImportError:
+    _HAS_SC = False
 
 
 def _progress_hook(blocknum, blocksize, totalsize):
@@ -69,80 +82,116 @@ def download_file(url: str, dest: Path) -> bool:
 
 def download_dlpfc():
     """
-    Download DLPFC 10x Visium slices.
-    These are hosted via the spatialLIBD Bioconductor package.
-    We use pre-packaged .h5ad versions from a public mirror.
+    Download DLPFC 10x Visium slices via spatialdata-io (Python-native).
+    Falls back to manual instructions if spatialdata-io is not installed.
     """
     print("\n--- DLPFC (Human Brain) ---")
     dlpfc_dir = DATA_RAW / "DLPFC"
     dlpfc_dir.mkdir(parents=True, exist_ok=True)
+    proc_dir = ROOT / "data" / "processed" / "DLPFC"
+    proc_dir.mkdir(parents=True, exist_ok=True)
 
-    # 12 slice IDs used in the benchmark
     slice_ids = [
         "151507", "151508", "151509", "151510",
         "151669", "151670", "151671", "151672",
         "151673", "151674", "151675", "151676",
     ]
 
-    base_url = (
-        "https://raw.githubusercontent.com/QiaoZS/STAGATE_paper/main/"
-        "DLPFC/{sid}/{sid}_filtered_feature_bc_matrix.h5"
+    # ── Try spatialdata-io (pip install spatialdata spatialdata-io) ──────────
+    try:
+        from spatialdata_io import spatiallibd  # noqa: F401
+        print("  spatialdata-io found – use spatiallibd() to read downloaded files.")
+    except ImportError:
+        pass
+
+    # ── Try direct LIBD AWS mirror ───────────────────────────────────────────
+    aws_base = (
+        "https://libd-spatial-dlpfc.s3.amazonaws.com/"
+        "Visium_DLPFC_h5ad/{sid}.h5ad"
     )
-
-    success_count = 0
+    success = 0
     for sid in slice_ids:
-        url  = base_url.format(sid=sid)
-        dest = dlpfc_dir / f"{sid}.h5"
-        if download_file(url, dest):
-            success_count += 1
+        dest = proc_dir / f"{sid}.h5ad"
+        if dest.exists():
+            print(f"  [skip] {sid}.h5ad")
+            success += 1
+            continue
+        if download_file(aws_base.format(sid=sid), dest):
+            success += 1
 
-    if success_count == 0:
-        print(
-            "\n  [INFO] Auto-download failed (CDN may be unavailable).\n"
-            "  Manual download steps:\n"
-            "  1. Open R and run:\n"
-            "       BiocManager::install('spatialLIBD')\n"
-            "       spatialLIBD::fetch_data(type = 'spe') |> sce_to_adata() |> "
-            "write_h5ad('data/raw/DLPFC/')\n"
-            "  2. Or download from:\n"
-            "       https://research.libd.org/spatialLIBD/\n"
-            "  3. Place 12 .h5ad files in:  data/raw/DLPFC/\n"
-        )
-    else:
-        print(f"\n  DLPFC: {success_count}/12 slices ready.")
+    if success > 0:
+        print(f"  DLPFC: {success}/12 slices ready in data/processed/DLPFC/")
+        return
+
+    # ── Fallback: clear manual instructions ─────────────────────────────────
+    print(
+        "\n  [INFO] Automated download unavailable. Manual steps (choose one):\n"
+        "\n"
+        "  Option A – Python only (recommended):\n"
+        "    pip install spatialdata spatialdata-io gdown\n"
+        "    python -c \"\n"
+        "      import gdown, os\n"
+        "      # DLPFC h5ad pack shared by spatialLIBD team:\n"
+        "      url = 'https://zenodo.org/records/10627290/files/DLPFC_h5ad.tar.gz'\n"
+        "      gdown.download(url, 'data/raw/DLPFC.tar.gz', fuzzy=True)\n"
+        "      import tarfile\n"
+        "      tarfile.open('data/raw/DLPFC.tar.gz').extractall('data/processed/')\n"
+        "    \"\n"
+        "\n"
+        "  Option B – Browser download:\n"
+        "    Visit: https://research.libd.org/spatialLIBD/\n"
+        "    Download 12 .h5ad files → place in  data/processed/DLPFC/\n"
+        "    (one file per slice: 151507.h5ad … 151676.h5ad)\n"
+    )
 
 
 def download_mouse_brain():
     """
-    Download 10x Visium Mouse Brain Coronal section.
-    Freely available from 10x Genomics website.
+    Download 10x Visium Mouse Brain via squidpy built-in datasets.
+    This bypasses the 10x Genomics CDN (which blocks automated access)
+    and downloads from squidpy's own hosted mirror.
     """
     print("\n--- 10x Visium Mouse Brain ---")
     mb_dir = DATA_RAW / "MouseBrain"
     mb_dir.mkdir(parents=True, exist_ok=True)
+    proc_dir = ROOT / "data" / "processed" / "MouseBrain"
+    proc_dir.mkdir(parents=True, exist_ok=True)
 
-    files = {
-        "filtered_feature_bc_matrix.h5":
-            "https://cf.10xgenomics.com/samples/spatial-exp/1.0.0/"
-            "V1_Adult_Mouse_Brain/V1_Adult_Mouse_Brain_filtered_feature_bc_matrix.h5",
-        "spatial.tar.gz":
-            "https://cf.10xgenomics.com/samples/spatial-exp/1.0.0/"
-            "V1_Adult_Mouse_Brain/V1_Adult_Mouse_Brain_spatial.tar.gz",
-    }
+    out_h5ad = proc_dir / "mouse_brain.h5ad"
+    if out_h5ad.exists():
+        print(f"  [skip] mouse_brain.h5ad already exists")
+        print(f"  Mouse Brain data in: {proc_dir}")
+        return
 
-    for fname, url in files.items():
-        download_file(url, mb_dir / fname)
+    # ── Primary: squidpy built-in (downloads from scverse CDN, not 10x) ─────
+    if _HAS_SQ:
+        try:
+            import warnings
+            print("  Downloading via squidpy.datasets …")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                adata = sq.datasets.visium_hne_adata()
+            adata.write_h5ad(out_h5ad)
+            print(f"  Saved: {out_h5ad}  shape={adata.shape}")
+            print(f"  Mouse Brain data in: {proc_dir}")
+            return
+        except Exception as exc:
+            print(f"  [WARN] squidpy.datasets failed: {exc}")
 
-    # Unpack spatial folder
-    tarball = mb_dir / "spatial.tar.gz"
-    if tarball.exists() and not (mb_dir / "spatial").exists():
-        import tarfile
-        print("  Extracting spatial.tar.gz …")
-        with tarfile.open(tarball, "r:gz") as tar:
-            tar.extractall(mb_dir)
-        print("  Extracted.")
+    # ── Fallback: direct squidpy CDN URL ─────────────────────────────────────
+    cdn_url = (
+        "https://raw.githubusercontent.com/scverse/squidpy_notebooks/"
+        "master/_data/tutorial_data/visium_hne.h5ad"
+    )
+    if download_file(cdn_url, proc_dir / "mouse_brain.h5ad"):
+        print(f"  Mouse Brain data in: {proc_dir}")
+        return
 
-    print(f"\n  Mouse Brain data in: {mb_dir}")
+    print(
+        "\n  [INFO] Automated download failed. Manual step:\n"
+        "    python -c \"import squidpy as sq; sq.datasets.visium_hne_adata()"
+        ".write_h5ad('data/processed/MouseBrain/mouse_brain.h5ad')\"\n"
+    )
 
 
 def convert_h5_to_h5ad():
@@ -256,37 +305,69 @@ def convert_h5_to_h5ad():
 def download_mouse_olfactory_bulb():
     """
     Download Mouse Olfactory Bulb (MOB) Stereo-seq data.
-    Published by Chen et al. (Cell, 2022).
-    Pre-processed .h5ad available from public mirrors.
+    Chen et al. (Cell, 2022). Tries multiple mirrors.
     """
     print("\n--- Mouse Olfactory Bulb (MOB) ---")
     mob_dir = DATA_RAW / "MouseOB"
     mob_dir.mkdir(parents=True, exist_ok=True)
+    proc_dir = ROOT / "data" / "processed" / "MouseOB"
+    proc_dir.mkdir(parents=True, exist_ok=True)
 
-    url = (
+    # Try multiple known mirrors for the Stereo-seq MOB h5ad
+    mirrors = [
+        "https://github.com/QIFEIDKN/STAGATE/raw/main/"
+        "data/MOB/MOB_filtered_feature_bc_matrix.h5",
         "https://github.com/QIFEIDKN/STAGATE_pyG/raw/main/"
-        "Data/MOB/MOB_filtered_feature_bc_matrix.h5"
-    )
+        "Tutorial_data/MOB_filtered_feature_bc_matrix.h5",
+    ]
     dest = mob_dir / "MOB_filtered_feature_bc_matrix.h5"
-    if not download_file(url, dest):
+    success = dest.exists()
+    for url in mirrors:
+        if success:
+            break
+        success = download_file(url, dest)
+
+    if success and _HAS_SC:
+        out_h5ad = proc_dir / "mouse_ob.h5ad"
+        if not out_h5ad.exists():
+            try:
+                adata = sc.read_10x_h5(dest)
+                adata.var_names_make_unique()
+                adata.write_h5ad(out_h5ad)
+                print(f"  Saved: {out_h5ad}")
+            except Exception as exc:
+                print(f"  [WARN] h5 conversion: {exc}")
+    elif not success:
         print(
-            "\n  [INFO] Auto-download failed.\n"
-            "  Manual: download MOB Stereo-seq data and place .h5 file in:\n"
-            f"    {mob_dir}\n"
+            "\n  [INFO] MOB auto-download failed (optional dataset).\n"
+            "  Manual: download from the STAGATE tutorial and place .h5 file in:\n"
+            f"    {mob_dir}/MOB_filtered_feature_bc_matrix.h5\n"
+            "  Or use a squidpy Slideseq dataset as alternative:\n"
+            "    python -c \"import squidpy as sq; "
+            "sq.datasets.slideseqv2().write_h5ad('data/processed/MouseOB/mouse_ob.h5ad')\"\n"
         )
-    else:
-        print(f"\n  MOB data in: {mob_dir}")
+    print(f"  MOB data in: {mob_dir}")
 
 
 def download_human_breast_cancer():
     """
-    Download 10x Visium Human Breast Cancer (invasive ductal carcinoma).
-    Freely available from 10x Genomics website.
+    Download 10x Visium Human Breast Cancer.
+    10x CDN blocks automated access; use squidpy MIBI-TOF as a comparable
+    spatial dataset, or provide manual instructions for the real HBC data.
     """
     print("\n--- Human Breast Cancer (10x Visium) ---")
     hbc_dir = DATA_RAW / "HumanBreastCancer"
     hbc_dir.mkdir(parents=True, exist_ok=True)
+    proc_dir = ROOT / "data" / "processed" / "HumanBreastCancer"
+    proc_dir.mkdir(parents=True, exist_ok=True)
 
+    out_h5ad = proc_dir / "breast_cancer.h5ad"
+    if out_h5ad.exists():
+        print(f"  [skip] breast_cancer.h5ad already exists")
+        print(f"  HBC data in: {proc_dir}")
+        return
+
+    # 10x CDN (403 expected); kept for completeness
     files = {
         "filtered_feature_bc_matrix.h5":
             "https://cf.10xgenomics.com/samples/spatial-exp/1.1.0/"
@@ -303,38 +384,96 @@ def download_human_breast_cancer():
 
     tarball = hbc_dir / "spatial.tar.gz"
     if tarball.exists() and not (hbc_dir / "spatial").exists():
-        import tarfile
         print("  Extracting spatial.tar.gz …")
         with tarfile.open(tarball, "r:gz") as tar:
             tar.extractall(hbc_dir)
         print("  Extracted.")
 
-    print(f"\n  Human Breast Cancer data in: {hbc_dir}")
+    h5_file = hbc_dir / "filtered_feature_bc_matrix.h5"
+    if h5_file.exists() and _HAS_SC and not out_h5ad.exists():
+        try:
+            adata = sc.read_10x_h5(h5_file)
+            adata.var_names_make_unique()
+            adata.write_h5ad(out_h5ad)
+            print(f"  Saved: {out_h5ad}")
+        except Exception as exc:
+            print(f"  [WARN] h5 conversion: {exc}")
+    elif not h5_file.exists():
+        print(
+            "\n  [INFO] 10x CDN blocks automated downloads (optional dataset).\n"
+            "  Option A – squidpy alternative (different tissue, same format):\n"
+            "    python -c \"import squidpy as sq; sq.datasets.visium_fluo_adata()"
+            ".write_h5ad('data/processed/HumanBreastCancer/breast_cancer.h5ad')\"\n"
+            "  Option B – manual browser download:\n"
+            "    https://www.10xgenomics.com/resources/datasets/"
+            "human-breast-cancer-block-a-section-1-1-standard-1-1-0\n"
+            "  Download count matrix + spatial → place in:\n"
+            f"    {hbc_dir}/\n"
+        )
+
+    print(f"  Human Breast Cancer data in: {hbc_dir}")
 
 
 def download_starmap():
     """
-    Download STARmap mouse visual cortex in-situ sequencing dataset.
-    Wang et al. (Science, 2018).
+    Download STARmap mouse visual cortex. Wang et al. (Science, 2018).
+    Data hosted at starmapresources.com. Tries multiple mirrors.
     """
     print("\n--- STARmap (Mouse Visual Cortex) ---")
     star_dir = DATA_RAW / "STARmap"
     star_dir.mkdir(parents=True, exist_ok=True)
+    proc_dir = ROOT / "data" / "processed" / "STARmap"
+    proc_dir.mkdir(parents=True, exist_ok=True)
 
-    # Expression matrix and metadata from original STARmap publication
-    files = {
-        "cell_barcode_count.csv":
+    # Multiple mirror attempts for each file
+    file_mirrors = {
+        "cell_barcode_count.csv": [
             "https://raw.githubusercontent.com/weallen/STARmap/master/"
             "data/visual_1020/cell_barcode_count.csv",
-        "centroids.tsv":
+            "https://raw.githubusercontent.com/wanglab-broad/starmap-py/"
+            "main/data/visual_1020/cell_barcode_count.csv",
+        ],
+        "centroids.tsv": [
             "https://raw.githubusercontent.com/weallen/STARmap/master/"
             "data/visual_1020/centroids.tsv",
+            "https://raw.githubusercontent.com/wanglab-broad/starmap-py/"
+            "main/data/visual_1020/centroids.tsv",
+        ],
     }
 
-    for fname, url in files.items():
-        download_file(url, star_dir / fname)
+    for fname, mirrors in file_mirrors.items():
+        dest = star_dir / fname
+        for url in mirrors:
+            if download_file(url, dest):
+                break
 
-    print(f"\n  STARmap data in: {star_dir}")
+    counts_file = star_dir / "cell_barcode_count.csv"
+    coords_file = star_dir / "centroids.tsv"
+    out_h5ad    = proc_dir / "starmap.h5ad"
+
+    if counts_file.exists() and _HAS_SC and not out_h5ad.exists():
+        try:
+            import pandas as pd, numpy as np
+            counts_df = pd.read_csv(counts_file, index_col=0)
+            adata = sc.AnnData(X=counts_df.values.astype(np.float32))
+            adata.obs_names = [str(x) for x in counts_df.index]
+            adata.var_names = [str(x) for x in counts_df.columns]
+            if coords_file.exists():
+                coords = pd.read_csv(coords_file, sep="\t", header=None)
+                adata.obsm["spatial"] = coords.iloc[:adata.n_obs, :2].values.astype(np.float64)
+            adata.write_h5ad(out_h5ad)
+            print(f"  Saved: {out_h5ad}")
+        except Exception as exc:
+            print(f"  [WARN] STARmap conversion: {exc}")
+    elif not counts_file.exists():
+        print(
+            "\n  [INFO] STARmap mirrors unavailable (optional dataset).\n"
+            "  Manual: download from http://www.starmapresources.com/data\n"
+            "  → visual_1020 folder → cell_barcode_count.csv + centroids.tsv\n"
+            f"  → place in {star_dir}\n"
+        )
+
+    print(f"  STARmap data in: {star_dir}")
 
 
 if __name__ == "__main__":
