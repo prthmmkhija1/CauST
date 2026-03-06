@@ -7,7 +7,7 @@ setup(
     name             = "caust",
     version          = "0.1.0",
     author           = "Pratham Makhija",
-    author_email     = "pratham@example.com",   # update with real email
+    author_email     = "pratham.makhija.ug23@nsut.ac.in",
     description      = (
         "CauST: Causal Gene Discovery for Spatial Transcriptomics "
         "via Graph Attention Autoencoders and Perturbation-Based Scoring"

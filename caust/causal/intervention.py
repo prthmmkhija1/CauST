@@ -22,10 +22,15 @@ This is the most principled approach because:
 Reference: Pearl J. (2009) "Causality: Models, Reasoning and Inference"
 """
 
-from typing import List, Literal
+from typing import List, Literal, Union
 
 import numpy as np
 
+try:
+    import torch
+    _HAS_TORCH = True
+except ImportError:
+    _HAS_TORCH = False
 
 InterventionMethod = Literal["mean_impute", "zero_out", "median_impute"]
 
@@ -54,14 +59,17 @@ def apply_intervention(
     -------
     X_perturbed : copy of X with column gene_idx modified
     """
-    X_perturbed = X.copy()
+    X_perturbed = X.clone() if _HAS_TORCH and isinstance(X, torch.Tensor) else X.copy()
 
     if method == "mean_impute":
         X_perturbed[:, gene_idx] = float(X[:, gene_idx].mean())
     elif method == "zero_out":
         X_perturbed[:, gene_idx] = 0.0
     elif method == "median_impute":
-        X_perturbed[:, gene_idx] = float(np.median(X[:, gene_idx]))
+        if _HAS_TORCH and isinstance(X, torch.Tensor):
+            X_perturbed[:, gene_idx] = float(X[:, gene_idx].median())
+        else:
+            X_perturbed[:, gene_idx] = float(np.median(X[:, gene_idx]))
     else:
         raise ValueError(
             f"Unknown intervention method: '{method}'. "
@@ -92,14 +100,17 @@ def apply_batch_interventions(
     -------
     X_perturbed : copy with all specified gene columns modified
     """
-    X_perturbed = X.copy()
+    X_perturbed = X.clone() if _HAS_TORCH and isinstance(X, torch.Tensor) else X.copy()
     for idx in gene_indices:
         if method == "mean_impute":
             X_perturbed[:, idx] = float(X[:, idx].mean())
         elif method == "zero_out":
             X_perturbed[:, idx] = 0.0
         elif method == "median_impute":
-            X_perturbed[:, idx] = float(np.median(X[:, idx]))
+            if _HAS_TORCH and isinstance(X, torch.Tensor):
+                X_perturbed[:, idx] = float(X[:, idx].median())
+            else:
+                X_perturbed[:, idx] = float(np.median(X[:, idx]))
         else:
             raise ValueError(f"Unknown method: '{method}'")
     return X_perturbed
@@ -132,5 +143,8 @@ def compute_global_disruption(
     float : mean L2 distance between original and perturbed latent vectors
     """
     diff = Z_original - Z_perturbed
-    per_spot_dist = np.linalg.norm(diff, axis=1)   # shape: (n_spots,)
+    if _HAS_TORCH and isinstance(diff, torch.Tensor):
+        per_spot_dist = torch.norm(diff, dim=1)
+    else:
+        per_spot_dist = np.linalg.norm(diff, axis=1)   # shape: (n_spots,)
     return float(per_spot_dist.mean())
