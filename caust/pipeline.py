@@ -313,6 +313,7 @@ class CauST:
         """
         self._check_fitted()
 
+        # Apply gene filtering/reweighting for the returned expression matrix
         adata_out = apply_gene_selection(
             adata,
             self._causal_scores,
@@ -321,12 +322,12 @@ class CauST:
             inplace = inplace,
         )
 
-        # Predict domain labels on the filtered data
-        adata_out = self._ensure_graph(adata_out)
-        edge_index = get_edge_index_from_adata(adata_out).to(self.device)
+        # Encode using the FULL original data — the model was trained on all genes
+        adata_full = self._ensure_graph(adata)
+        edge_index = get_edge_index_from_adata(adata_full).to(self.device)
 
         import scipy.sparse as sp
-        X = adata_out.X
+        X = adata_full.X
         if sp.issparse(X):
             X = X.toarray()
         x_t   = torch.FloatTensor(X.astype(np.float32)).to(self.device)
