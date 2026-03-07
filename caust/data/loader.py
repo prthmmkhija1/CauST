@@ -72,16 +72,50 @@ def load_and_preprocess(
         adata = sc.read_h5ad(path)
     print(f"         Raw shape: {adata.n_obs} spots × {adata.n_vars} genes")
 
-    # Preserve raw counts before any modification
+    # ── Detect if data is already preprocessed ───────────────────────────
+    # Strategy: check for raw/counts first, then fall back to checking
+    # whether adata.X has negative values (= already scaled → skip QC).
+    already_scaled = False
+
+    if hasattr(adata, "raw") and adata.raw is not None:
+        # spatialLIBD files often store raw counts in adata.raw
+        print("         Found adata.raw — using raw counts for QC & normalization")
+        adata_raw = adata.raw.to_adata()
+        # Transfer obsm (spatial coords) and obs (metadata) from original
+        adata_raw.obsm = adata.obsm
+        adata_raw.obs  = adata.obs.loc[adata_raw.obs_names]
+        adata = adata_raw
+    elif "counts" in getattr(adata, "layers", {}):
+        print("         Found layers['counts'] — using raw counts for QC & normalization")
+        import scipy.sparse as _sp
+        X_counts = adata.layers["counts"]
+        if _sp.issparse(X_counts):
+            X_counts = X_counts.toarray()
+        adata.X = X_counts
+    else:
+        # Check if X contains negative values → already scaled; skip QC/norm
+        import scipy.sparse as _sp
+        X_check = adata.X
+        if _sp.issparse(X_check):
+            X_check = X_check.toarray()
+        if float(X_check.min()) < -0.01:
+            already_scaled = True
+            print(
+                "         Data appears already scaled (min < 0) — "
+                "skipping QC filter, normalization, and scaling steps."
+            )
+
+    # Preserve raw counts before any modification (for later reference)
     adata.layers["counts"] = adata.X.copy()
 
     # ── Quality filtering ────────────────────────────────────────────────
-    sc.pp.filter_cells(adata, min_genes=min_genes)
-    sc.pp.filter_genes(adata, min_cells=min_cells)
-    print(f"         After QC : {adata.n_obs} spots × {adata.n_vars} genes")
+    if not already_scaled:
+        sc.pp.filter_cells(adata, min_genes=min_genes)
+        sc.pp.filter_genes(adata, min_cells=min_cells)
+        print(f"         After QC : {adata.n_obs} spots × {adata.n_vars} genes")
 
     # ── Normalization ────────────────────────────────────────────────────
-    if normalize:
+    if normalize and not already_scaled:
         sc.pp.normalize_total(adata, target_sum=1e4)
         sc.pp.log1p(adata)
 
@@ -97,7 +131,7 @@ def load_and_preprocess(
     adata = adata[:, adata.var["highly_variable"]].copy()
 
     # ── Scaling ──────────────────────────────────────────────────────────
-    if scale:
+    if scale and not already_scaled:
         sc.pp.scale(adata, max_value=10)
         adata.layers["scaled"] = adata.X.copy()
 
