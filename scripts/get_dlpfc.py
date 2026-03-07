@@ -188,32 +188,52 @@ def strategy_raw_tar() -> int:
             elif "lowres_image" in key:
                 decompress_gz_file(src, spatial_dir / "tissue_lowres_image.png")
 
-        # ── Read with scanpy ──────────────────────────────────────────────
+        # ── Read with scanpy (MTX format — no .h5 files in GEO deposit) ──
         try:
-            if (spatial_dir / "tissue_positions_list.csv").exists():
-                adata = sc.read_visium(
-                    path=sample_dir,
-                    count_file="matrix.mtx.gz",
-                    load_images=False,
-                )
+            import pandas as pd
+            adata = sc.read_10x_mtx(sample_dir)
+            adata.var_names_make_unique()
+
+            # Attach spatial coordinates from tissue_positions_list.csv
+            pos_file = spatial_dir / "tissue_positions_list.csv"
+            if pos_file.exists():
+                try:
+                    # Newer spaceranger: has header row
+                    pos = pd.read_csv(pos_file, header=0)
+                    if pos.shape[1] == 6:
+                        pos.columns = ["barcode", "in_tissue", "array_row",
+                                       "array_col", "pxl_row", "pxl_col"]
+                    else:
+                        raise ValueError("unexpected columns")
+                except Exception:
+                    # Older spaceranger: no header
+                    pos = pd.read_csv(
+                        pos_file, header=None,
+                        names=["barcode", "in_tissue", "array_row",
+                               "array_col", "pxl_row", "pxl_col"],
+                    )
+                pos = pos.set_index("barcode")
+
+                # Filter to spots present in adata (already tissue-only from barcodes.tsv)
+                common = adata.obs_names[adata.obs_names.isin(pos.index)]
+                if len(common) > 0:
+                    pos = pos.reindex(adata.obs_names)
+                    adata.obsm["spatial"] = (
+                        pos[["pxl_col", "pxl_row"]].fillna(0).values.astype(float)
+                    )
+                    adata.obs["array_row"] = pos["array_row"].values
+                    adata.obs["array_col"] = pos["array_col"].values
+                    note = "spatial attached"
+                else:
+                    note = "no spatial overlap"
             else:
-                adata = sc.read_10x_mtx(sample_dir)
-                adata.var_names_make_unique()
+                note = "no spatial file"
 
             adata.write_h5ad(out_path)
-            print(f"  {label}: {adata.n_obs} spots × {adata.n_vars} genes → saved")
+            print(f"  {label}: {adata.n_obs} spots × {adata.n_vars} genes → saved ({note})")
             converted += 1
         except Exception as exc:
             print(f"  [WARN] Failed for {label}: {exc}")
-            # Try alternative: read mtx directly without spatial
-            try:
-                adata = sc.read_10x_mtx(sample_dir)
-                adata.var_names_make_unique()
-                adata.write_h5ad(out_path)
-                print(f"  {label}: {adata.n_obs} spots × {adata.n_vars} genes → saved (no spatial)")
-                converted += 1
-            except Exception as exc2:
-                print(f"  [WARN] Also failed without spatial: {exc2}")
 
     return converted
 
