@@ -230,15 +230,12 @@ def _geo_download_raw_tar(accession: str, dest_dir: Path) -> Path | None:
 
 def download_dlpfc():
     """
-    Download the full DLPFC 10x Visium dataset from NCBI GEO.
+    Download the full DLPFC 10x Visium dataset from NCBI GEO (GSE144136).
 
     The LIBD AWS S3 mirror only contains the 224-spot manually-annotated
     subset.  For clustering benchmarks we need the complete tissue sections
-    (~3 400 spots each).  The full spaceranger output is on NCBI GEO.
-
-    Tries the two most likely GEO accessions in order:
-      1. GSE144136  (Maynard et al. 2021, primary deposit)
-      2. GSE151673  (alternative / updated deposit)
+    (~3 400 spots each).  The full spaceranger output is at NCBI GEO under
+    accession GSE144136 (Maynard et al. 2021, Nature Neuroscience).
     Auto-discovers the actual filename via FTP directory listing.
     """
     print("\n--- DLPFC (Human Brain) ---")
@@ -267,12 +264,8 @@ def download_dlpfc():
         return
     print(f"  {valid_raw}/12 valid slices found; fetching from NCBI GEO …")
 
-    # ── Try GEO accessions in priority order ─────────────────────────────────
-    geo_tar = None
-    for accession in ["GSE144136", "GSE151673"]:
-        geo_tar = _geo_download_raw_tar(accession, DATA_RAW)
-        if geo_tar is not None:
-            break
+    # ── Try to auto-discover and download the RAW tar from GEO ─────────────
+    geo_tar = _geo_download_raw_tar("GSE144136", DATA_RAW)
 
     if geo_tar is None:
         _print_dlpfc_manual_instructions(dlpfc_dir)
@@ -321,22 +314,24 @@ def _print_dlpfc_manual_instructions(dlpfc_dir: Path):
         "\n  ──────────────────────────────────────────────────────────────────\n"
         "  Automated DLPFC download failed.\n"
         "\n"
-        "  The full Visium data (~3 400 spots/slice) is at NCBI GEO.\n"
-        "  Visit either accession page and download the RAW tar:\n"
-        "    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
-        "    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE151673\n"
+        "  The full Visium data (~3 400 spots/slice) is at NCBI GEO accession\n"
+        "  GSE144136 (Maynard et al. 2021, Nature Neuroscience).\n"
         "\n"
-        "  Quick wget once you have the correct filename:\n"
-        "    # replace GSE144136_RAW.tar with the actual filename shown on the page\n"
+        "  Step 1 – browse the GEO page and note the actual supplementary\n"
+        "           tar filename (look for a file ending in _RAW.tar):\n"
+        "    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
+        "\n"
+        "  Step 2 – download (replace FILENAME with what you found on the page):\n"
         "    wget -P data/raw/ \\\n"
-        "      'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE144nnn/GSE144136/suppl/GSE144136_RAW.tar'\n"
+        "      'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE144nnn/GSE144136/suppl/FILENAME'\n"
+        "\n"
+        "  Step 3 – extract and convert:\n"
         "    mkdir -p data/raw/GSE144136_RAW_raw\n"
-        "    tar xf data/raw/GSE144136_RAW.tar -C data/raw/GSE144136_RAW_raw/\n"
+        "    tar xf data/raw/FILENAME -C data/raw/GSE144136_RAW_raw/\n"
         "    python scripts/01_download_data.py   # converts .h5 → .h5ad\n"
         "\n"
-        "  After conversion, place the 12 .h5ad files in:\n"
-        f"    {dlpfc_dir}/\n"
-        "  Each file must have ≥1 000 spots to be treated as valid.\n"
+        "  Each converted file must have ≥1 000 spots.\n"
+        f"  Target directory: {dlpfc_dir}\n"
         "  Then run: python scripts/02_preprocess.py\n"
         "  ──────────────────────────────────────────────────────────────────\n"
     )
