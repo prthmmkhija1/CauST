@@ -268,6 +268,125 @@ def strategy_raw_tar(tar_names: list[str]) -> int:
     return converted
 
 
+# ── Visium txt.gz strategy (GSE144239-specific) ─────────────────────────────
+
+def strategy_visium_txt(files: dict[str, str]) -> int:
+    """
+    Use the series-level text files from GSE144239:
+      - GSE144239_ST_Visium_counts.txt.gz   (genes × spots count matrix)
+      - GSE144239_ST_barcode_id.txt.gz      (barcode → sample/slice mapping)
+    """
+    import numpy as np
+    import pandas as pd
+    import anndata as ad
+    from scipy.sparse import csr_matrix
+
+    counts_name  = next((n for n in files if "Visium_counts" in n and n.endswith(".txt.gz")), None)
+    barcode_name = next((n for n in files if "barcode_id" in n and n.endswith(".txt.gz")), None)
+
+    if not counts_name or not barcode_name:
+        # Try all_counts as fallback
+        counts_name = next((n for n in files if "all_counts" in n and n.endswith(".txt.gz")), None)
+    if not counts_name or not barcode_name:
+        print(f"  Could not identify Visium txt files in: {list(files.keys())}")
+        return 0
+
+    print("  Strategy: Visium txt.gz files …")
+    counts_local  = DL_DIR / counts_name
+    barcode_local = DL_DIR / barcode_name
+
+    if not download(f"{BASE_FTP_URL}{files[counts_name]}",  counts_local):  return 0
+    if not download(f"{BASE_FTP_URL}{files[barcode_name]}", barcode_local): return 0
+
+    # ── Load barcode → slice ID mapping ──────────────────────────────────
+    print("  Loading barcode_id …")
+    bc_df = pd.read_csv(barcode_local, sep="\t", compression="gzip", header=None)
+    # Columns are flexible; find one that contains slice IDs
+    # Common formats: [barcode, sample_id] or [barcode, x, y, sample_id]
+    bc_str = bc_df.astype(str)
+    sid_col = None
+    for col in bc_str.columns:
+        if any(sid in bc_str[col].values for sid in SLICE_IDS):
+            sid_col = col
+            break
+    if sid_col is None:
+        print(f"  [WARN] Cannot identify slice-ID column. First rows:\n{bc_df.head()}")
+        # Try treating each barcode as prefixed with slice ID (e.g. '151507_AAAC...')
+        bc_col = 0
+        barcodes_raw = bc_str.iloc[:, bc_col].values
+        slice_labels = np.array([
+            next((sid for sid in SLICE_IDS if sid in bc), "") for bc in barcodes_raw
+        ])
+    else:
+        barcodes_raw = bc_str.iloc[:, 0].values
+        slice_labels = bc_str[sid_col].values
+
+    print(f"  Barcodes: {len(barcodes_raw)}  assigned: {int((slice_labels != '').sum())}")
+    if not any(slice_labels != ""):
+        print(f"  First 5 rows of barcode file:\n{bc_df.head()}")
+        return 0
+
+    # ── Load count matrix ─────────────────────────────────────────────────
+    print("  Loading Visium counts (this may take a moment) …")
+    counts = pd.read_csv(counts_local, sep="\t", compression="gzip", index_col=0)
+    # Matrix is genes × spots → transpose to spots × genes
+    if counts.shape[1] == len(barcodes_raw):
+        mat = csr_matrix(counts.values.T)   # genes×spots → spots×genes
+        gene_names = counts.index.values
+        spot_barcodes = counts.columns.values
+    elif counts.shape[0] == len(barcodes_raw):
+        mat = csr_matrix(counts.values)     # already spots×genes
+        gene_names = counts.columns.values
+        spot_barcodes = counts.index.values
+    else:
+        print(f"  [WARN] Count matrix shape {counts.shape} doesn't match "
+              f"{len(barcodes_raw)} barcodes")
+        # Align by barcode intersection
+        common = np.intersect1d(barcodes_raw, counts.columns.values)
+        if len(common) == 0:
+            common = np.intersect1d(barcodes_raw, counts.index.values)
+            if len(common) == 0:
+                print("  Cannot align barcodes to count matrix."); return 0
+            counts = counts.loc[common]
+            mat = csr_matrix(counts.values)
+            gene_names = counts.columns.values
+        else:
+            counts = counts[common]
+            mat = csr_matrix(counts.values.T)
+            gene_names = counts.index.values
+        spot_barcodes = common
+        # Rebuild slice_labels for aligned barcodes
+        bc_to_slice = dict(zip(barcodes_raw, slice_labels))
+        slice_labels = np.array([bc_to_slice.get(bc, "") for bc in spot_barcodes])
+
+    print(f"  Matrix: {mat.shape[0]} spots × {mat.shape[1]} genes")
+
+    # ── Split by slice and save ───────────────────────────────────────────
+    converted = 0
+    for sid in SLICE_IDS:
+        out = OUT_DIR / f"{sid}.h5ad"
+        if is_valid_h5ad(out):
+            print(f"  [skip] {sid}.h5ad"); converted += 1; continue
+
+        mask = slice_labels == sid
+        if not mask.any():
+            print(f"  [WARN] No spots for slice {sid}"); continue
+
+        adata = ad.AnnData(
+            X=mat[mask],
+            obs=pd.DataFrame(index=spot_barcodes[mask] if hasattr(spot_barcodes, '__getitem__')
+                             else np.array(spot_barcodes)[mask]),
+            var=pd.DataFrame(index=gene_names),
+        )
+        adata.var_names_make_unique()
+        adata.obs_names_make_unique()
+        adata.write_h5ad(out)
+        print(f"  {sid}: {int(mask.sum())} spots – saved")
+        converted += 1
+
+    return converted
+
+
 # ── MTX / combined matrix strategy ───────────────────────────────────────────
 
 def strategy_combined_mtx(files: dict[str, str]) -> int:
@@ -376,16 +495,20 @@ def main():
     print()
 
     # ── Step 2: choose strategy based on available files ─────────────────────
-    raw_tars = [n for n in basenames
-                if "RAW" in n.upper() and n.endswith((".tar", ".tar.gz", ".tgz"))]
+    raw_tars  = [n for n in basenames
+                 if "RAW" in n.upper() and n.endswith((".tar", ".tar.gz", ".tgz"))]
     mtx_files = [n for n in basenames if n.endswith(".mtx.gz")]
+    txt_files = [n for n in basenames if n.endswith(".txt.gz")]
 
+    converted = 0
     if raw_tars:
         converted = strategy_raw_tar(raw_tars)
-    elif mtx_files:
+    if converted == 0 and txt_files:
+        # RAW tar had no h5 files — use the series-level txt.gz count files
+        converted = strategy_visium_txt(files)
+    if converted == 0 and mtx_files:
         converted = strategy_combined_mtx(files)
-    else:
-        # Try per-GSM pages as last resort
+    if converted == 0:
         converted = strategy_per_gsm()
 
     print()
