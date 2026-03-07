@@ -94,119 +94,127 @@ def _dlpfc_file_is_valid(path) -> bool:
         return False
 
 
-def _gsm_ftp_files(gsm_acc: str) -> list:
-    """List supplementary files in the NCBI FTP directory for a GSM sample."""
-    import ftplib
-    digits       = gsm_acc[3:]                           # e.g. "4284316"
-    gsm_prefix   = gsm_acc[:3] + digits[:-3] + "nnn"    # "GSM4284nnn"
-    ftp_dir      = f"/geo/samples/{gsm_prefix}/{gsm_acc}/suppl/"
-    try:
-        ftp = ftplib.FTP("ftp.ncbi.nlm.nih.gov", timeout=30)
-        ftp.login()
-        names = ftp.nlst(ftp_dir)
-        ftp.quit()
-        return names
-    except Exception as exc:
-        print(f"  [FTP] Could not list {gsm_acc}/suppl/: {exc}")
-        return []
-
-
-def _geo_gsm_for_slices(series_acc: str, slice_ids: list) -> dict:
-    """
-    Query the GEO soft text endpoint to map slice IDs → GSM accessions.
-    Returns {slice_id: gsm_accession} for each slice found.
-    """
-    import urllib.request as req
-    url = (
-        f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi"
-        f"?acc={series_acc}&targ=gsm&form=text&view=brief"
+def _geo_series_ftp_url(accession: str, filename: str) -> str:
+    """Build the FTP-over-HTTPS URL for a series-level supplementary file."""
+    digits = accession.replace("GSE", "")
+    prefix = "GSE" + digits[:-3] + "nnn"          # GSE144nnn
+    return (
+        f"https://ftp.ncbi.nlm.nih.gov/geo/series/{prefix}/"
+        f"{accession}/suppl/{filename}"
     )
-    try:
-        with req.urlopen(url, timeout=30) as resp:
-            text = resp.read().decode("utf-8", errors="ignore")
-    except Exception as exc:
-        print(f"  [GEO] Could not query sample list: {exc}")
-        return {}
-
-    result      = {}
-    current_gsm = None
-    for line in text.splitlines():
-        if line.startswith("^SAMPLE = "):
-            current_gsm = line.split("= ", 1)[1].strip()
-        elif line.startswith("!Sample_title = ") and current_gsm:
-            title = line.split("= ", 1)[1].strip()
-            for sid in slice_ids:
-                if sid in title and sid not in result:
-                    result[sid] = current_gsm
-                    break
-    return result
 
 
-def _download_gsm_sample(gsm_acc: str, sid: str, dest_dir: Path) -> Path | None:
+def _download_dlpfc_geo_files(dl_dir: Path) -> bool:
     """
-    Download filtered_feature_bc_matrix.h5[.gz] (and optionally spatial.tar.gz)
-    for one GSM sample, decompress if needed, and return the local .h5 path.
+    Download the three series-level supplementary files from GSE144136:
+      - GSE144136_GeneBarcodeMatrix_Annotated.mtx.gz  (413 MB, count matrix)
+      - GSE144136_CellNames.csv.gz                    (barcodes + slice IDs)
+      - GSE144136_GeneNames.csv.gz                    (gene symbols)
+    Returns True if all three exist on disk afterwards.
+    """
+    needed = [
+        "GSE144136_GeneBarcodeMatrix_Annotated.mtx.gz",
+        "GSE144136_CellNames.csv.gz",
+        "GSE144136_GeneNames.csv.gz",
+    ]
+    for fname in needed:
+        dest = dl_dir / fname
+        if dest.exists():
+            print(f"  [skip] {fname} already downloaded")
+            continue
+        url = _geo_series_ftp_url("GSE144136", fname)
+        if not download_file(url, dest):
+            return False
+    return all((dl_dir / f).exists() for f in needed)
+
+
+def _split_mtx_to_h5ad(dl_dir: Path, out_dir: Path, slice_ids: list) -> int:
+    """
+    Load the combined MTX matrix + CSV metadata, split by slice ID
+    embedded in cell names, and write one h5ad per slice.
+    Returns number of slices written.
     """
     import gzip
-    import shutil
+    import pandas as pd
+    import scipy.io as sio
+    import anndata as ad
+    import numpy as np
 
-    files = _gsm_ftp_files(gsm_acc)
-    if not files:
-        return None
+    mtx_path   = dl_dir / "GSE144136_GeneBarcodeMatrix_Annotated.mtx.gz"
+    cells_path = dl_dir / "GSE144136_CellNames.csv.gz"
+    genes_path = dl_dir / "GSE144136_GeneNames.csv.gz"
 
-    bases = {os.path.basename(f): f for f in files}
+    print("  Loading GeneBarcodeMatrix_Annotated.mtx.gz …")
+    mat = sio.mmread(mtx_path).T.tocsr()          # genes × cells → cells × genes
 
-    # ── Download h5 matrix ────────────────────────────────────────────────
-    h5_candidates = [n for n in bases if n.endswith(".h5") or n.endswith(".h5.gz")]
-    if not h5_candidates:
-        print(f"  [WARN] No .h5 file in {gsm_acc}/suppl/: {list(bases.keys())}")
-        return None
+    print("  Loading CellNames.csv.gz …")
+    cells_df = pd.read_csv(cells_path, header=None, compression="gzip")
+    cell_names = cells_df.iloc[:, 0].astype(str).values
 
-    h5_remote = bases[h5_candidates[0]]
-    h5_local  = dest_dir / h5_candidates[0]
-    if not h5_local.exists():
-        url = f"https://ftp.ncbi.nlm.nih.gov{h5_remote}"
-        if not download_file(url, h5_local):
-            return None
+    print("  Loading GeneNames.csv.gz …")
+    genes_df = pd.read_csv(genes_path, header=None, compression="gzip")
+    gene_names = genes_df.iloc[:, 0].astype(str).values
 
-    if str(h5_local).endswith(".gz"):
-        decompressed = h5_local.with_suffix("")
-        if not decompressed.exists():
-            with gzip.open(h5_local, "rb") as fin, open(decompressed, "wb") as fout:
-                shutil.copyfileobj(fin, fout)
-        h5_local = decompressed
+    print(f"  Combined matrix: {mat.shape[0]} cells × {mat.shape[1]} genes")
 
-    # ── Download spatial archive (optional) ───────────────────────────────
-    spatial_candidates = [n for n in bases if "spatial" in n.lower() and n.endswith(".tar.gz")]
-    if spatial_candidates:
-        sp_remote = bases[spatial_candidates[0]]
-        sp_local  = dest_dir / spatial_candidates[0]
-        if not sp_local.exists():
-            url = f"https://ftp.ncbi.nlm.nih.gov{sp_remote}"
-            download_file(url, sp_local)   # best-effort; non-fatal
-        if sp_local.exists():
-            with tarfile.open(sp_local, "r:gz") as tar:
-                tar.extractall(dest_dir)
+    # ── Extract slice ID from cell names ──────────────────────────────────
+    # Names typically look like: "151507_AAACAAGTATCTCCCA-1" or "AAACAAGTATCTCCCA-1_151507"
+    # Try prefix first, then suffix
+    slice_labels = np.array([""] * len(cell_names), dtype=object)
+    for sid in slice_ids:
+        mask = np.array([sid in cn for cn in cell_names])
+        slice_labels[mask] = sid
 
-    return h5_local
+    assigned = np.sum(slice_labels != "")
+    print(f"  Assigned {assigned}/{len(cell_names)} cells to known slice IDs")
 
+    if assigned == 0:
+        # Show a few cell names to help debug
+        print(f"  First 5 cell names: {cell_names[:5].tolist()}")
+        print("  [ERROR] Could not match any cell names to slice IDs.")
+        return 0
 
-def _convert_sample_to_h5ad(h5_path: Path, sample_dir: Path, sid: str, out_path: Path):
-    """Convert a single 10x h5 + optional spatial folder → h5ad."""
-    spatial_dir = sample_dir / "spatial"
-    if spatial_dir.exists():
-        adata = sc.read_visium(
-            path=sample_dir,
-            count_file=h5_path.name,
-            load_images=False,
+    converted = 0
+    for sid in slice_ids:
+        out_path = out_dir / f"{sid}.h5ad"
+        if _dlpfc_file_is_valid(out_path):
+            print(f"  [skip] {sid}.h5ad already valid")
+            converted += 1
+            continue
+
+        mask = slice_labels == sid
+        n_spots = int(mask.sum())
+        if n_spots == 0:
+            print(f"  [WARN] No cells found for slice {sid}")
+            continue
+
+        sub_mat   = mat[mask]
+        sub_cells = cell_names[mask]
+
+        # Strip slice prefix/suffix from barcode to get clean barcode
+        barcodes = []
+        for cn in sub_cells:
+            bc = cn.replace(f"{sid}_", "").replace(f"_{sid}", "").replace(sid, "")
+            if bc.startswith("_"):
+                bc = bc[1:]
+            if bc.endswith("_"):
+                bc = bc[:-1]
+            barcodes.append(bc if bc else cn)
+
+        adata = ad.AnnData(
+            X=sub_mat,
+            obs=pd.DataFrame(index=barcodes),
+            var=pd.DataFrame(index=gene_names),
         )
-    else:
-        adata = sc.read_10x_h5(h5_path)
         adata.var_names_make_unique()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    adata.write_h5ad(out_path)
-    print(f"  {sid}: {adata.n_obs} spots × {adata.n_vars} genes → saved")
-    return adata.n_obs
+        adata.obs_names_make_unique()
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        adata.write_h5ad(out_path)
+        print(f"  {sid}: {n_spots} spots × {adata.n_vars} genes → saved")
+        converted += 1
+
+    return converted
 
 
 def download_dlpfc():
@@ -214,14 +222,16 @@ def download_dlpfc():
     Download the full DLPFC 10x Visium dataset from NCBI GEO (GSE144136).
 
     The LIBD AWS S3 mirror only contains 224-spot manually-annotated subsets.
-    Full tissue sections (~3 400 spots each) are in individual GSM sample
-    pages of GSE144136 (Maynard et al. 2021, Nature Neuroscience).
+    The series-level tar (GSE144136_GRCh38-1.2.0_premrna.tar.gz) is a Cell
+    Ranger genome reference, NOT count data.
 
-    Strategy:
-      1. Query GEO soft text to map slice IDs → GSM accessions.
-      2. For each GSM, download filtered_feature_bc_matrix.h5[.gz] from
-         its FTP supplementary directory.
-      3. Convert to h5ad.
+    The actual count data is in three series-level supplementary files:
+      - GSE144136_GeneBarcodeMatrix_Annotated.mtx.gz  (combined sparse matrix)
+      - GSE144136_CellNames.csv.gz   (barcodes with embedded slice IDs)
+      - GSE144136_GeneNames.csv.gz   (gene symbols)
+
+    Strategy: download these 3 files, load the combined matrix, split by
+    slice ID, and save per-slice h5ad files (~3 400 spots each).
     """
     print("\n--- DLPFC (Human Brain) ---")
     dlpfc_dir = DATA_RAW / "DLPFC"
@@ -249,48 +259,16 @@ def download_dlpfc():
         return
     print(f"  {valid_raw}/12 valid slices found; fetching from NCBI GEO …")
 
-    # ── Find which GSM accession corresponds to each slice ───────────────────
-    print("  Querying GEO sample list for GSE144136 …")
-    gsm_map = _geo_gsm_for_slices("GSE144136", slice_ids)
-    if not gsm_map:
-        print("  [WARN] Could not retrieve sample list from GEO.")
+    # ── Download the three series-level files ────────────────────────────────
+    dl_dir = DATA_RAW / "DLPFC_geo"
+    dl_dir.mkdir(parents=True, exist_ok=True)
+
+    if not _download_dlpfc_geo_files(dl_dir):
         _print_dlpfc_manual_instructions(dlpfc_dir)
         return
-    print(f"  Found {len(gsm_map)}/12 sample mappings: {gsm_map}")
 
-    # ── Download + convert each sample ───────────────────────────────────────
-    converted = 0
-    for sid in slice_ids:
-        out_path = dlpfc_dir / f"{sid}.h5ad"
-        if _dlpfc_file_is_valid(out_path):
-            print(f"  [skip] {sid}.h5ad already valid")
-            converted += 1
-            continue
-
-        if sid not in gsm_map:
-            print(f"  [WARN] No GSM found for slice {sid} – skipping")
-            continue
-
-        gsm = gsm_map[sid]
-        sample_dl_dir = DATA_RAW / f"DLPFC_raw" / sid
-        sample_dl_dir.mkdir(parents=True, exist_ok=True)
-
-        print(f"  Downloading {sid} ({gsm}) …")
-        h5_path = _download_gsm_sample(gsm, sid, sample_dl_dir)
-        if h5_path is None:
-            print(f"  [WARN] Download failed for {sid}")
-            continue
-
-        if not _HAS_SC:
-            print("  [SKIP] scanpy not installed – cannot convert.")
-            continue
-
-        try:
-            _convert_sample_to_h5ad(h5_path, sample_dl_dir, sid, out_path)
-            converted += 1
-        except Exception as exc:
-            print(f"  [WARN] Conversion failed for {sid}: {exc}")
-
+    # ── Split combined matrix into per-slice h5ad ────────────────────────────
+    converted = _split_mtx_to_h5ad(dl_dir, dlpfc_dir, slice_ids)
     if converted > 0:
         print(f"  DLPFC: {converted}/12 slices ready in {dlpfc_dir}")
         print("  Run  python scripts/02_preprocess.py  next.")
@@ -315,23 +293,20 @@ def _print_dlpfc_manual_instructions(dlpfc_dir: Path):
         "\n  ──────────────────────────────────────────────────────────────────\n"
         "  Automated DLPFC download failed.\n"
         "\n"
-        "  The full Visium data (~3 400 spots/slice) is in individual SAMPLE\n"
-        "  pages of GEO series GSE144136 (Maynard et al. 2021).\n"
-        "  NOTE: the series-level file 'GSE144136_GRCh38-1.2.0_premrna.tar.gz'\n"
-        "  is a Cell Ranger genome reference — NOT count data.\n"
+        "  The data is at GEO series GSE144136. Download these 3 files:\n"
+        "    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
         "\n"
-        "  Manual approach:\n"
-        "  1. Go to https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
-        "  2. Click a sample link (e.g. GSM4284316 for slice 151507)\n"
-        "  3. Scroll down to 'Supplementary file' and download:\n"
-        "       *_filtered_feature_bc_matrix.h5.gz\n"
-        "       *_spatial.tar.gz   (for spatial coordinates)\n"
-        "  4. Repeat for all 12 slices (151507-151510, 151669-151676)\n"
-        "  5. Place each h5[.gz] in  data/raw/DLPFC_raw/{slice_id}/\n"
-        "     and the extracted spatial/ folder alongside it\n"
-        "  6. Re-run: python scripts/01_download_data.py\n"
+        "  1. GSE144136_GeneBarcodeMatrix_Annotated.mtx.gz  (413 MB)\n"
+        "  2. GSE144136_CellNames.csv.gz\n"
+        "  3. GSE144136_GeneNames.csv.gz\n"
         "\n"
-        "  Each converted file must have ≥1 000 spots.\n"
+        "  Place all three in: data/raw/DLPFC_geo/\n"
+        "  Then re-run: python scripts/01_download_data.py\n"
+        "\n"
+        "  NOTE: the 10 GB file GSE144136_GRCh38-1.2.0_premrna.tar.gz\n"
+        "  is a Cell Ranger genome reference — NOT count data. Do NOT download it.\n"
+        "\n"
+        "  Each converted slice must have ≥1 000 spots.\n"
         f"  Target directory: {dlpfc_dir}\n"
         "  Then run: python scripts/02_preprocess.py\n"
         "  ──────────────────────────────────────────────────────────────────\n"
