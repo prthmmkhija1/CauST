@@ -217,7 +217,7 @@ def strategy_raw_tar(tar_names: list[str]) -> int:
     if not download(raw_url, raw_local):
         return 0
 
-    extract_dir = DL_DIR / raw_name.replace(".tar", "").replace(".gz", "") + "_ext"
+    extract_dir = DL_DIR / (raw_name.replace(".tar", "").replace(".gz", "") + "_ext")
     extract_dir.mkdir(exist_ok=True)
     if not any(extract_dir.iterdir()):
         print(f"  Extracting {raw_name} …")
