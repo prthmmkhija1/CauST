@@ -80,10 +80,105 @@ def download_file(url: str, dest: Path) -> bool:
         return False
 
 
+def _dlpfc_file_is_valid(path) -> bool:
+    """Return True if an h5ad file exists and has >= 1000 spots (full section)."""
+    if not path.exists():
+        return False
+    try:
+        import anndata as ad
+        tmp = ad.read_h5ad(path, backed="r")
+        n_obs = tmp.n_obs
+        tmp.file.close()
+        return n_obs >= 1000
+    except Exception:
+        return False
+
+
+def _convert_geo_dlpfc_to_h5ad(extract_dir: Path, out_dir: Path, slice_ids):
+    """
+    Walk the extracted GSE144136_RAW directory, find per-sample h5 matrix +
+    spatial folders, and write one h5ad per DLPFC slice.
+    Returns the number of slices successfully converted.
+    """
+    if not _HAS_SC:
+        print("  [SKIP] scanpy not installed – cannot convert GEO files.")
+        return 0
+
+    import gzip
+    import shutil
+
+    converted = 0
+    for sid in slice_ids:
+        out_path = out_dir / f"{sid}.h5ad"
+        if _dlpfc_file_is_valid(out_path):
+            print(f"  [skip] {sid}.h5ad already valid")
+            converted += 1
+            continue
+
+        # ── Locate the h5 matrix file for this slice ─────────────────────
+        # GEO archives are often named  {GSM}_{SID}_filtered_feature_bc_matrix.h5[.gz]
+        candidates = (
+            list(extract_dir.rglob(f"*{sid}*filtered_feature_bc_matrix.h5"))
+            + list(extract_dir.rglob(f"*{sid}*filtered_feature_bc_matrix.h5.gz"))
+            + list(extract_dir.rglob(f"*{sid}*.h5"))
+        )
+        if not candidates:
+            print(f"  [WARN] No h5 file found for slice {sid} in extracted archive")
+            continue
+
+        h5_path = candidates[0]
+
+        # Decompress .gz if needed
+        if str(h5_path).endswith(".gz"):
+            decompressed = h5_path.with_suffix("")
+            if not decompressed.exists():
+                with gzip.open(h5_path, "rb") as fin, open(decompressed, "wb") as fout:
+                    shutil.copyfileobj(fin, fout)
+            h5_path = decompressed
+
+        # ── Locate spatial folder ─────────────────────────────────────────
+        sample_dir = h5_path.parent
+        spatial_dir = sample_dir / "spatial"
+
+        if not spatial_dir.exists():
+            # Try extracting a *spatial*.tar.gz alongside the h5
+            spatial_tars = (
+                list(sample_dir.glob(f"*{sid}*spatial*.tar.gz"))
+                + list(sample_dir.glob("*spatial*.tar.gz"))
+            )
+            if spatial_tars:
+                with tarfile.open(spatial_tars[0], "r:gz") as tar:
+                    tar.extractall(sample_dir)
+                spatial_dir = sample_dir / "spatial"
+
+        try:
+            if spatial_dir.exists():
+                adata = sc.read_visium(
+                    path=sample_dir,
+                    count_file=h5_path.name,
+                    load_images=False,
+                )
+            else:
+                adata = sc.read_10x_h5(h5_path)
+                adata.var_names_make_unique()
+
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            adata.write_h5ad(out_path)
+            print(f"  {sid}: {adata.n_obs} spots × {adata.n_vars} genes → saved")
+            converted += 1
+        except Exception as exc:
+            print(f"  [WARN] Could not convert {sid}: {exc}")
+
+    return converted
+
+
 def download_dlpfc():
     """
-    Download DLPFC 10x Visium slices via spatialdata-io (Python-native).
-    Falls back to manual instructions if spatialdata-io is not installed.
+    Download the full DLPFC 10x Visium dataset from NCBI GEO (GSE144136).
+
+    NOTE: The LIBD AWS S3 mirror only contains the 224-spot manually-annotated
+    subset used for layer labelling.  For clustering benchmarks we need the
+    *complete* tissue sections (~3 400 spots each), which are at NCBI GEO.
     """
     print("\n--- DLPFC (Human Brain) ---")
     dlpfc_dir = DATA_RAW / "DLPFC"
@@ -97,53 +192,86 @@ def download_dlpfc():
         "151673", "151674", "151675", "151676",
     ]
 
-    # ── Try spatialdata-io (pip install spatialdata spatialdata-io) ──────────
-    try:
-        from spatialdata_io import spatiallibd  # noqa: F401
-        print("  spatialdata-io found – use spatiallibd() to read downloaded files.")
-    except ImportError:
-        pass
-
-    # ── Try direct LIBD AWS mirror ───────────────────────────────────────────
-    # Download RAW files to data/raw/ — preprocessing (02_preprocess.py) runs separately.
-    aws_base = (
-        "https://libd-spatial-dlpfc.s3.amazonaws.com/"
-        "Visium_DLPFC_h5ad/{sid}.h5ad"
-    )
-    success = 0
+    # ── Remove any existing 224-spot (wrong) raw files ───────────────────────
     for sid in slice_ids:
-        dest = dlpfc_dir / f"{sid}.h5ad"          # data/raw/DLPFC/
-        if dest.exists() or (proc_dir / f"{sid}.h5ad").exists():
-            print(f"  [skip] {sid}.h5ad")
-            success += 1
-            continue
-        if download_file(aws_base.format(sid=sid), dest):
-            success += 1
+        raw_path = dlpfc_dir / f"{sid}.h5ad"
+        if raw_path.exists() and not _dlpfc_file_is_valid(raw_path):
+            print(f"  [stale] Removing {sid}.h5ad ({raw_path}) – too few spots")
+            raw_path.unlink()
 
-    if success > 0:
-        print(f"  DLPFC: {success}/12 slices downloaded to data/raw/DLPFC/")
-        print(f"  Run 02_preprocess.py next to generate processed files.")
+    # ── Short-circuit if all valid raw h5ad files already exist ──────────────
+    valid_raw = sum(1 for sid in slice_ids if _dlpfc_file_is_valid(dlpfc_dir / f"{sid}.h5ad"))
+    if valid_raw == 12:
+        print(f"  [skip] All 12 DLPFC slices already valid in {dlpfc_dir}")
         return
 
-    # ── Fallback: clear manual instructions ─────────────────────────────────
+    print(f"  {valid_raw}/12 valid slices found; downloading the rest from NCBI GEO …")
+
+    # ── Download the full series archive from NCBI GEO ───────────────────────
+    # GSE144136_RAW.tar  ≈ 600 MB – contains all 12 spaceranger barcode matrices
+    # + spatial folders. This is the authoritative, full-section data.
+    geo_raw_tar = DATA_RAW / "GSE144136_RAW.tar"
+    geo_url = (
+        "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE144nnn/"
+        "GSE144136/suppl/GSE144136_RAW.tar"
+    )
+
+    if not geo_raw_tar.exists():
+        print("  Downloading GSE144136_RAW.tar from NCBI GEO (~600 MB) …")
+        ok = download_file(geo_url, geo_raw_tar)
+        if not ok:
+            _print_dlpfc_manual_instructions(dlpfc_dir)
+            return
+    else:
+        print(f"  [skip] GSE144136_RAW.tar already on disk")
+
+    # ── Extract ───────────────────────────────────────────────────────────────
+    extract_dir = DATA_RAW / "GSE144136_raw"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    if not any(extract_dir.iterdir()):
+        print("  Extracting …")
+        with tarfile.open(geo_raw_tar) as tar:
+            tar.extractall(extract_dir)
+        print("  Extraction complete.")
+
+        # Inner per-sample archives are sometimes .tar.gz themselves
+        for inner in extract_dir.glob("*.tar.gz"):
+            sample_dir = extract_dir / inner.stem.replace(".tar", "")
+            sample_dir.mkdir(exist_ok=True)
+            with tarfile.open(inner, "r:gz") as t:
+                t.extractall(sample_dir)
+
+    # ── Convert to h5ad ───────────────────────────────────────────────────────
+    converted = _convert_geo_dlpfc_to_h5ad(extract_dir, dlpfc_dir, slice_ids)
+
+    if converted > 0:
+        print(f"  DLPFC: {converted}/12 slices ready in {dlpfc_dir}")
+        print(f"  Run 02_preprocess.py next to generate processed files.")
+    else:
+        _print_dlpfc_manual_instructions(dlpfc_dir)
+
+
+def _print_dlpfc_manual_instructions(dlpfc_dir: Path):
     print(
-        "\n  [INFO] Automated download unavailable. Manual steps (choose one):\n"
+        "\n  ──────────────────────────────────────────────────────────────\n"
+        "  Automated DLPFC download failed.  Manual steps (choose one):\n"
         "\n"
-        "  Option A – Python only (recommended):\n"
-        "    pip install spatialdata spatialdata-io gdown\n"
-        "    python -c \"\n"
-        "      import gdown, os\n"
-        "      # DLPFC h5ad pack shared by spatialLIBD team:\n"
-        "      url = 'https://zenodo.org/records/10627290/files/DLPFC_h5ad.tar.gz'\n"
-        "      gdown.download(url, 'data/raw/DLPFC.tar.gz', fuzzy=True)\n"
-        "      import tarfile\n"
-        "      tarfile.open('data/raw/DLPFC.tar.gz').extractall('data/processed/')\n"
-        "    \"\n"
+        "  Option A – wget/curl from NCBI GEO (recommended):\n"
+        "    wget -P data/raw/ \\\n"
+        "      https://ftp.ncbi.nlm.nih.gov/geo/series/GSE144nnn/GSE144136/suppl/GSE144136_RAW.tar\n"
+        "    cd data/raw && tar xf GSE144136_RAW.tar -C GSE144136_raw/\n"
+        "    python scripts/01_download_data.py   # re-run to convert .h5 → .h5ad\n"
         "\n"
-        "  Option B – Browser download:\n"
-        "    Visit: https://research.libd.org/spatialLIBD/\n"
-        "    Download 12 .h5ad files → place in  data/processed/DLPFC/\n"
-        "    (one file per slice: 151507.h5ad … 151676.h5ad)\n"
+        "  Option B – per-sample wget (smaller, one at a time):\n"
+        "    See NCBI GEO page: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
+        "    Download each sample's supplementary *filtered_feature_bc_matrix.h5.gz\n"
+        "    + spatial.tar.gz → extract to  data/raw/GSE144136_raw/{GSM_id}/\n"
+        "    Then re-run: python scripts/01_download_data.py\n"
+        "\n"
+        "  After conversion, run: python scripts/02_preprocess.py\n"
+        f"  Target directory: {dlpfc_dir}\n"
+        "  ──────────────────────────────────────────────────────────────\n"
     )
 
 
