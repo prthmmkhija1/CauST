@@ -172,13 +172,74 @@ def _convert_geo_dlpfc_to_h5ad(extract_dir: Path, out_dir: Path, slice_ids):
     return converted
 
 
+def _geo_ftp_list(accession: str) -> list:
+    """
+    Return filenames in the NCBI GEO FTP supplementary directory for *accession*.
+    Returns empty list if the directory is unreachable or empty.
+    """
+    import ftplib
+    digits = accession[3:]                        # "144136"
+    series_prefix = accession[:3] + digits[:-3] + "nnn"  # "GSE144nnn"
+    ftp_dir = f"/geo/series/{series_prefix}/{accession}/suppl/"
+    try:
+        ftp = ftplib.FTP("ftp.ncbi.nlm.nih.gov", timeout=30)
+        ftp.login()
+        names = ftp.nlst(ftp_dir)
+        ftp.quit()
+        return names
+    except Exception as exc:
+        print(f"  [FTP] Could not list {accession}/suppl/: {exc}")
+        return []
+
+
+def _geo_download_raw_tar(accession: str, dest_dir: Path) -> Path | None:
+    """
+    Auto-discover and download the RAW tarball for a GEO series.
+    Returns the local Path on success, None on failure.
+    """
+    # Check if already downloaded
+    for ext in [".tar", ".tar.gz", ".tgz"]:
+        existing = dest_dir / f"{accession}_RAW{ext}"
+        if existing.exists():
+            print(f"  [skip] {existing.name} already on disk")
+            return existing
+
+    print(f"  Querying NCBI GEO FTP for {accession} …")
+    names = _geo_ftp_list(accession)
+    if not names:
+        return None
+
+    # Find a RAW archive
+    raw_candidates = [
+        n for n in names
+        if "RAW" in os.path.basename(n).upper()
+        and os.path.basename(n).endswith((".tar", ".tar.gz", ".tgz"))
+    ]
+    if not raw_candidates:
+        basenames = [os.path.basename(n) for n in names]
+        print(f"  No RAW tar found under {accession}. Files: {basenames}")
+        return None
+
+    remote_path = raw_candidates[0]
+    fname       = os.path.basename(remote_path)
+    url  = f"https://ftp.ncbi.nlm.nih.gov{remote_path}"
+    dest = dest_dir / fname
+    print(f"  Found: {fname}")
+    return dest if download_file(url, dest) else None
+
+
 def download_dlpfc():
     """
-    Download the full DLPFC 10x Visium dataset from NCBI GEO (GSE144136).
+    Download the full DLPFC 10x Visium dataset from NCBI GEO.
 
-    NOTE: The LIBD AWS S3 mirror only contains the 224-spot manually-annotated
-    subset used for layer labelling.  For clustering benchmarks we need the
-    *complete* tissue sections (~3 400 spots each), which are at NCBI GEO.
+    The LIBD AWS S3 mirror only contains the 224-spot manually-annotated
+    subset.  For clustering benchmarks we need the complete tissue sections
+    (~3 400 spots each).  The full spaceranger output is on NCBI GEO.
+
+    Tries the two most likely GEO accessions in order:
+      1. GSE144136  (Maynard et al. 2021, primary deposit)
+      2. GSE151673  (alternative / updated deposit)
+    Auto-discovers the actual filename via FTP directory listing.
     """
     print("\n--- DLPFC (Human Brain) ---")
     dlpfc_dir = DATA_RAW / "DLPFC"
@@ -192,59 +253,50 @@ def download_dlpfc():
         "151673", "151674", "151675", "151676",
     ]
 
-    # ── Remove any existing 224-spot (wrong) raw files ───────────────────────
+    # ── Remove stale 224-spot raw files ──────────────────────────────────────
     for sid in slice_ids:
         raw_path = dlpfc_dir / f"{sid}.h5ad"
         if raw_path.exists() and not _dlpfc_file_is_valid(raw_path):
-            print(f"  [stale] Removing {sid}.h5ad ({raw_path}) – too few spots")
+            print(f"  [stale] Removing {sid}.h5ad – only {_dlpfc_obs(raw_path)} spots")
             raw_path.unlink()
 
-    # ── Short-circuit if all valid raw h5ad files already exist ──────────────
-    valid_raw = sum(1 for sid in slice_ids if _dlpfc_file_is_valid(dlpfc_dir / f"{sid}.h5ad"))
+    # ── Short-circuit if all 12 valid slices already present ─────────────────
+    valid_raw = sum(1 for s in slice_ids if _dlpfc_file_is_valid(dlpfc_dir / f"{s}.h5ad"))
     if valid_raw == 12:
         print(f"  [skip] All 12 DLPFC slices already valid in {dlpfc_dir}")
         return
+    print(f"  {valid_raw}/12 valid slices found; fetching from NCBI GEO …")
 
-    print(f"  {valid_raw}/12 valid slices found; downloading the rest from NCBI GEO …")
+    # ── Try GEO accessions in priority order ─────────────────────────────────
+    geo_tar = None
+    for accession in ["GSE144136", "GSE151673"]:
+        geo_tar = _geo_download_raw_tar(accession, DATA_RAW)
+        if geo_tar is not None:
+            break
 
-    # ── Download the full series archive from NCBI GEO ───────────────────────
-    # GSE144136_RAW.tar  ≈ 600 MB – contains all 12 spaceranger barcode matrices
-    # + spatial folders. This is the authoritative, full-section data.
-    geo_raw_tar = DATA_RAW / "GSE144136_RAW.tar"
-    geo_url = (
-        "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE144nnn/"
-        "GSE144136/suppl/GSE144136_RAW.tar"
-    )
+    if geo_tar is None:
+        _print_dlpfc_manual_instructions(dlpfc_dir)
+        return
 
-    if not geo_raw_tar.exists():
-        print("  Downloading GSE144136_RAW.tar from NCBI GEO (~600 MB) …")
-        ok = download_file(geo_url, geo_raw_tar)
-        if not ok:
-            _print_dlpfc_manual_instructions(dlpfc_dir)
-            return
-    else:
-        print(f"  [skip] GSE144136_RAW.tar already on disk")
-
-    # ── Extract ───────────────────────────────────────────────────────────────
-    extract_dir = DATA_RAW / "GSE144136_raw"
+    # ── Extract outer tar ────────────────────────────────────────────────────
+    extract_dir = DATA_RAW / (geo_tar.stem.replace(".tar", "") + "_raw")
     extract_dir.mkdir(parents=True, exist_ok=True)
 
     if not any(extract_dir.iterdir()):
-        print("  Extracting …")
-        with tarfile.open(geo_raw_tar) as tar:
+        print(f"  Extracting {geo_tar.name} …")
+        with tarfile.open(geo_tar) as tar:
             tar.extractall(extract_dir)
         print("  Extraction complete.")
 
-        # Inner per-sample archives are sometimes .tar.gz themselves
+        # Inner per-sample .tar.gz archives (common GEO pattern)
         for inner in extract_dir.glob("*.tar.gz"):
-            sample_dir = extract_dir / inner.stem.replace(".tar", "")
+            sample_dir = extract_dir / inner.name.replace(".tar.gz", "")
             sample_dir.mkdir(exist_ok=True)
             with tarfile.open(inner, "r:gz") as t:
                 t.extractall(sample_dir)
 
     # ── Convert to h5ad ───────────────────────────────────────────────────────
     converted = _convert_geo_dlpfc_to_h5ad(extract_dir, dlpfc_dir, slice_ids)
-
     if converted > 0:
         print(f"  DLPFC: {converted}/12 slices ready in {dlpfc_dir}")
         print(f"  Run 02_preprocess.py next to generate processed files.")
@@ -252,26 +304,41 @@ def download_dlpfc():
         _print_dlpfc_manual_instructions(dlpfc_dir)
 
 
+def _dlpfc_obs(path) -> int:
+    """Return spot count of an h5ad without fully loading it."""
+    try:
+        import anndata as ad
+        tmp = ad.read_h5ad(path, backed="r")
+        n = tmp.n_obs
+        tmp.file.close()
+        return n
+    except Exception:
+        return 0
+
+
 def _print_dlpfc_manual_instructions(dlpfc_dir: Path):
     print(
-        "\n  ──────────────────────────────────────────────────────────────\n"
-        "  Automated DLPFC download failed.  Manual steps (choose one):\n"
+        "\n  ──────────────────────────────────────────────────────────────────\n"
+        "  Automated DLPFC download failed.\n"
         "\n"
-        "  Option A – wget/curl from NCBI GEO (recommended):\n"
+        "  The full Visium data (~3 400 spots/slice) is at NCBI GEO.\n"
+        "  Visit either accession page and download the RAW tar:\n"
+        "    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
+        "    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE151673\n"
+        "\n"
+        "  Quick wget once you have the correct filename:\n"
+        "    # replace GSE144136_RAW.tar with the actual filename shown on the page\n"
         "    wget -P data/raw/ \\\n"
-        "      https://ftp.ncbi.nlm.nih.gov/geo/series/GSE144nnn/GSE144136/suppl/GSE144136_RAW.tar\n"
-        "    cd data/raw && tar xf GSE144136_RAW.tar -C GSE144136_raw/\n"
-        "    python scripts/01_download_data.py   # re-run to convert .h5 → .h5ad\n"
+        "      'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE144nnn/GSE144136/suppl/GSE144136_RAW.tar'\n"
+        "    mkdir -p data/raw/GSE144136_RAW_raw\n"
+        "    tar xf data/raw/GSE144136_RAW.tar -C data/raw/GSE144136_RAW_raw/\n"
+        "    python scripts/01_download_data.py   # converts .h5 → .h5ad\n"
         "\n"
-        "  Option B – per-sample wget (smaller, one at a time):\n"
-        "    See NCBI GEO page: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
-        "    Download each sample's supplementary *filtered_feature_bc_matrix.h5.gz\n"
-        "    + spatial.tar.gz → extract to  data/raw/GSE144136_raw/{GSM_id}/\n"
-        "    Then re-run: python scripts/01_download_data.py\n"
-        "\n"
-        "  After conversion, run: python scripts/02_preprocess.py\n"
-        f"  Target directory: {dlpfc_dir}\n"
-        "  ──────────────────────────────────────────────────────────────\n"
+        "  After conversion, place the 12 .h5ad files in:\n"
+        f"    {dlpfc_dir}/\n"
+        "  Each file must have ≥1 000 spots to be treated as valid.\n"
+        "  Then run: python scripts/02_preprocess.py\n"
+        "  ──────────────────────────────────────────────────────────────────\n"
     )
 
 
