@@ -147,7 +147,7 @@ def load_and_preprocess(
 
 
 def load_multiple_slices(
-    paths: List[Union[str, Path]],
+    paths: Union[Dict, List[Union[str, Path]]],
     slice_ids: Optional[List] = None,
     **preprocess_kwargs,
 ) -> Dict:
@@ -156,22 +156,27 @@ def load_multiple_slices(
 
     Parameters
     ----------
-    paths      : list of .h5ad file paths
-    slice_ids  : identifiers for each slice (defaults to 0, 1, 2, …)
+    paths      : dict {slice_id: path_or_AnnData} **or** list of .h5ad file paths
+    slice_ids  : identifiers for each slice (defaults to 0, 1, 2, …).
+                 Ignored when *paths* is a dict (keys are used instead).
     **preprocess_kwargs : forwarded to load_and_preprocess
 
     Returns
     -------
     dict  {slice_id: AnnData}
     """
-    if slice_ids is None:
-        slice_ids = list(range(len(paths)))
-
-    if len(paths) != len(slice_ids):
-        raise ValueError("len(paths) must equal len(slice_ids)")
+    # Accept a dict mapping slice_id → path/AnnData
+    if isinstance(paths, dict):
+        items = list(paths.items())
+    else:
+        if slice_ids is None:
+            slice_ids = list(range(len(paths)))
+        if len(paths) != len(slice_ids):
+            raise ValueError("len(paths) must equal len(slice_ids)")
+        items = list(zip(slice_ids, paths))
 
     slices: Dict = {}
-    for sid, path in zip(slice_ids, paths):
+    for sid, path in items:
         print(f"\n{'─'*50}")
         print(f"Loading slice: {sid}")
         slices[sid] = load_and_preprocess(path, **preprocess_kwargs)
