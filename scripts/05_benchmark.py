@@ -65,7 +65,7 @@ def run_baseline(adata, n_clusters, device="cpu"):
     data = data.to(device)
     model = SpatialAutoencoder(data.x.shape[1]).to(device)
     model, _ = train_autoencoder(model, data, epochs=EPOCHS)
-    Z = model.get_latent(data).cpu().numpy()
+    Z = model.get_latent(data.x, data.edge_index)
     labels = cluster_latent(Z, n_clusters)
     return Z, labels
 
