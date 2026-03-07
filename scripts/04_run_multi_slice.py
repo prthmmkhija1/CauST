@@ -33,7 +33,7 @@ N_CAUSAL_GENES   = 500
 N_CLUSTERS       = 7
 EPOCHS           = 500
 ALPHA            = 0.5
-SCORING_METHOD   = "perturbation"
+SCORING_METHOD   = "gradient+perturbation"
 FILTER_MODE      = "filter_and_reweight"
 GROUND_TRUTH_KEY = "layer_guess"
 

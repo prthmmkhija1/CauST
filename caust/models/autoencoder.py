@@ -206,7 +206,13 @@ def train_autoencoder(
     loss_history: List[float] = []
     model.train()
 
-    for epoch in range(1, epochs + 1):
+    epoch_iter = range(1, epochs + 1)
+    if verbose:
+        from tqdm import tqdm
+        epoch_iter = tqdm(epoch_iter, desc="  Training", unit="ep",
+                          bar_format="  {l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]")
+
+    for epoch in epoch_iter:
         optimizer.zero_grad()
         _, x_recon = model(data.x, data.edge_index)
         loss = F.mse_loss(x_recon, data.x)
@@ -217,9 +223,9 @@ def train_autoencoder(
         loss_val = loss.item()
         loss_history.append(loss_val)
 
-        if verbose and epoch % 50 == 0:
-            print(f"    [Epoch {epoch:4d}/{epochs}]  Loss: {loss_val:.6f}"
-                  f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
+        if verbose and hasattr(epoch_iter, 'set_postfix'):
+            epoch_iter.set_postfix(loss=f"{loss_val:.6f}",
+                                   lr=f"{optimizer.param_groups[0]['lr']:.1e}")
 
     model.eval()
     print(f"  Training complete. Final loss: {loss_history[-1]:.6f}")

@@ -154,6 +154,24 @@ def main():
     print("  CauST — Figure Regeneration")
     print("=" * 55)
 
+    # Guard: ensure upstream scripts have been run first
+    missing = []
+    bm_csv_check = RESULTS_DIR / "benchmark" / "all_results.csv"
+    ps_csv_check = RESULTS_DIR / "multi_slice" / "per_slice_metrics.csv"
+    if not bm_csv_check.exists():
+        missing.append(f"  • {bm_csv_check.relative_to(RESULTS_DIR.parent.parent)}  (run 05_benchmark.py first)")
+    if not ps_csv_check.exists():
+        missing.append(f"  • {ps_csv_check.relative_to(RESULTS_DIR.parent.parent)}  (run 04_run_multi_slice.py first)")
+    if missing:
+        print("\n  [ERROR] Required result files are missing:")
+        for m in missing:
+            print(m)
+        print("\n  Run the upstream scripts in order:")
+        print("    python scripts/04_run_multi_slice.py")
+        print("    python scripts/05_benchmark.py")
+        print("  Then re-run this script.")
+        return
+
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     generated = 0
 

@@ -105,14 +105,15 @@ def download_dlpfc():
         pass
 
     # ── Try direct LIBD AWS mirror ───────────────────────────────────────────
+    # Download RAW files to data/raw/ — preprocessing (02_preprocess.py) runs separately.
     aws_base = (
         "https://libd-spatial-dlpfc.s3.amazonaws.com/"
         "Visium_DLPFC_h5ad/{sid}.h5ad"
     )
     success = 0
     for sid in slice_ids:
-        dest = proc_dir / f"{sid}.h5ad"
-        if dest.exists():
+        dest = dlpfc_dir / f"{sid}.h5ad"          # data/raw/DLPFC/
+        if dest.exists() or (proc_dir / f"{sid}.h5ad").exists():
             print(f"  [skip] {sid}.h5ad")
             success += 1
             continue
@@ -120,7 +121,8 @@ def download_dlpfc():
             success += 1
 
     if success > 0:
-        print(f"  DLPFC: {success}/12 slices ready in data/processed/DLPFC/")
+        print(f"  DLPFC: {success}/12 slices downloaded to data/raw/DLPFC/")
+        print(f"  Run 02_preprocess.py next to generate processed files.")
         return
 
     # ── Fallback: clear manual instructions ─────────────────────────────────

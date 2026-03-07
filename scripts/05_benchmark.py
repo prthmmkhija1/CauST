@@ -3,7 +3,8 @@ scripts/05_benchmark.py
 ========================
 ONE-SHOT script: full ablation + benchmark across datasets and methods.
 
-Run once. All outputs auto-saved.
+Resumable: results are saved after each slice+variant. If the script is
+interrupted and re-run, completed conditions are skipped automatically.
 
     python scripts/05_benchmark.py
 
@@ -21,14 +22,17 @@ Downstream methods:
   - GraphST         : if GraphST is installed
 
 Datasets:
-  - DLPFC 151507  (and more slices if present)
+  - DLPFC (first 4 slices)
   - MouseBrain    (if processed)
+  - MouseOB       (if processed)
+  - HBC           (if processed)
+  - STARmap       (if processed)
 
 Results saved as:  experiments/results/benchmark/all_results.csv
-Figures saved as:  experiments/results/benchmark/benchmark_plot.png
+Figures saved as:  experiments/results/benchmark/benchmark_*.png
 """
 
-import sys, json
+import sys, json, time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,32 +43,66 @@ N_CAUSAL_GENES   = 500
 N_CLUSTERS_DLPFC = 7
 N_CLUSTERS_MOUSE = 10
 EPOCHS           = 500
-SCORING_METHOD   = "perturbation"
-GROUND_TRUTH_KEY = "layer_guess"   # DLPFC; set to None if unavailable
+SCORING_METHOD   = "gradient+perturbation"
+GROUND_TRUTH_KEY = "layer_guess"
 OUTPUT_DIR       = ROOT / "experiments" / "results" / "benchmark"
+CSV_PATH         = OUTPUT_DIR / "all_results.csv"
 # ─────────────────────────────────────────────────────────────────────────
 
 import scanpy as sc
 import pandas as pd
+from tqdm import tqdm
 from caust import CauST
-from caust.causal.scorer import compute_perturbation_causal_scores
+from caust.causal.scorer import cluster_latent
 from caust.data.graph import build_spatial_graph, adata_to_pyg_data
-from caust.filter.gene_filter import filter_and_reweight, filter_top_k, reweight_genes
 from caust.models.autoencoder import SpatialAutoencoder, train_autoencoder
 from caust.evaluate.metrics import evaluate_single_slice
 from caust.visualize.plots import plot_benchmark_results
 
 
+# ---------------------------------------------------------------------------
+# Helpers: incremental CSV
+# ---------------------------------------------------------------------------
+
+def load_existing_results() -> pd.DataFrame:
+    """Load previously completed results, or return empty DataFrame."""
+    if CSV_PATH.exists():
+        df = pd.read_csv(CSV_PATH)
+        print(f"  Loaded {len(df)} existing results from {CSV_PATH.name}")
+        return df
+    return pd.DataFrame()
+
+
+def is_done(df: pd.DataFrame, slice_id: str, variant: str, method: str) -> bool:
+    """Check if a (slice, variant, method) combination already has results."""
+    if df.empty:
+        return False
+    mask = (
+        (df["slice"] == slice_id) &
+        (df["variant"] == variant) &
+        (df["method"] == method)
+    )
+    return mask.any()
+
+
+def append_and_save(df: pd.DataFrame, record: dict) -> pd.DataFrame:
+    """Append one result row and flush to CSV immediately."""
+    df = pd.concat([df, pd.DataFrame([record])], ignore_index=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_csv(CSV_PATH, index=False)
+    return df
+
+
+# ---------------------------------------------------------------------------
+# Benchmark runners
+# ---------------------------------------------------------------------------
+
 def run_baseline(adata, n_clusters, device="cpu"):
     """Raw HVG features only — no causal intervention."""
-    from caust.data.graph import build_spatial_graph, adata_to_pyg_data
-    from caust.models.autoencoder import SpatialAutoencoder, train_autoencoder
-    from caust.causal.scorer import cluster_latent
     build_spatial_graph(adata)
-    data = adata_to_pyg_data(adata)
-    data = data.to(device)
+    data = adata_to_pyg_data(adata).to(device)
     model = SpatialAutoencoder(data.x.shape[1]).to(device)
-    model, _ = train_autoencoder(model, data, epochs=EPOCHS)
+    model, _ = train_autoencoder(model, data, epochs=EPOCHS, device=device)
     Z = model.get_latent(data.x, data.edge_index)
     labels = cluster_latent(Z, n_clusters)
     return Z, labels
@@ -78,7 +116,7 @@ def run_caust_variant(adata, n_clusters, filter_mode, device="cpu"):
         epochs         = EPOCHS,
         filter_mode    = filter_mode,
         scoring_method = SCORING_METHOD,
-        verbose        = False,
+        verbose        = True,
     )
     adata_out = model.fit_transform(adata.copy())
     Z      = adata_out.obsm["caust_latent"]
@@ -95,8 +133,7 @@ def try_stagate(adata, device="cpu"):
         labels_raw = adata_out.obs.get("mclust", None)
         if Z is None or labels_raw is None:
             return None, None
-        labels = labels_raw.astype(int).values
-        return Z, labels
+        return Z, labels_raw.astype(int).values
     except (ImportError, Exception) as e:
         print(f"    [STAGATE skip] {e}")
         return None, None
@@ -111,63 +148,34 @@ def try_graphst(adata, n_clusters, device="cpu"):
         labels_raw = adata_out.obs.get("graphst_domain", None)
         if Z is None or labels_raw is None:
             return None, None
-        labels = labels_raw.astype(int).values
-        return Z, labels
+        return Z, labels_raw.astype(int).values
     except (ImportError, Exception) as e:
         print(f"    [GraphST skip] {e}")
         return None, None
 
 
-def benchmark_slice(adata, slice_id, n_clusters, gt_key, device):
-    records = []
+def evaluate_and_record(df, adata, slice_id, variant, method, Z, labels, gt_key):
+    """Evaluate metrics and save result row to CSV immediately."""
+    if Z is None:
+        return df
+    labels_true = None
+    if gt_key and gt_key in adata.obs.columns:
+        labels_true = adata.obs[gt_key].values
+    m = evaluate_single_slice(labels, Z, labels_true, prefix="")
+    m.update({"slice": slice_id, "variant": variant, "method": method})
+    print(f"    ✓ {variant}/{method}: "
+          f"ARI={m.get('ari', float('nan')):.4f}  "
+          f"Sil={m.get('silhouette', float('nan')):.4f}")
+    return append_and_save(df, m)
 
-    def record(variant, method, Z, labels):
-        if Z is None:
-            return
-        labels_true = None
-        if gt_key and gt_key in adata.obs.columns:
-            labels_true = adata.obs[gt_key].values
-        m = evaluate_single_slice(labels, Z, labels_true, prefix="")
-        m.update({"slice": slice_id, "variant": variant, "method": method})
-        records.append(m)
-        print(f"    {variant}/{method}: "
-              f"ARI={m.get('ari', float('nan')):.4f}  "
-              f"Sil={m.get('silhouette', float('nan')):.4f}")
 
-    print(f"\n  === {slice_id} ===")
-
-    # Baseline
-    Z, labels = run_baseline(adata, n_clusters, device)
-    record("Baseline", "CauST-internal", Z, labels)
-
-    # CauST variants
-    for fm, variant_name in [
-        ("filter",                "CauST-Filter"),
-        ("reweight",              "CauST-Reweight"),
-        ("filter_and_reweight",   "CauST-Full"),
-    ]:
-        try:
-            Z, labels = run_caust_variant(adata, n_clusters, fm, device)
-            record(variant_name, "CauST-internal", Z, labels)
-        except Exception as e:
-            print(f"    [{variant_name} failed]: {e}")
-
-    # Optional STAGATE (best CauST filtering + STAGATE downstream)
-    Z_stage, labels_stage = try_stagate(adata, device)
-    if Z_stage is not None:
-        record("CauST-Full", "STAGATE", Z_stage, labels_stage)
-
-    # Optional GraphST
-    Z_gst, labels_gst = try_graphst(adata, n_clusters, device)
-    if Z_gst is not None:
-        record("CauST-Full", "GraphST", Z_gst, labels_gst)
-
-    return records
-
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     print("=" * 55)
-    print("  CauST — Full Benchmark / Ablation Study")
+    print("  CauST — Full Benchmark / Ablation Study  (resumable)")
     print("=" * 55)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -176,96 +184,131 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\n  Device: {device}")
 
-    all_records = []
+    df = load_existing_results()
 
-    # ── DLPFC ─────────────────────────────────────────────────────────────
+    # ── Collect all (dataset_path, slice_id, n_clusters, gt_key) jobs ─────
+    jobs = []
+
     dlpfc_dir = ROOT / "data" / "processed" / "DLPFC"
     if dlpfc_dir.exists():
-        # Benchmark on first 4 slices to keep runtime manageable
         slices = sorted(p.stem for p in dlpfc_dir.glob("*.h5ad"))[:4]
         for sid in slices:
-            adata = sc.read_h5ad(dlpfc_dir / f"{sid}.h5ad")
-            records = benchmark_slice(
-                adata, sid, N_CLUSTERS_DLPFC, GROUND_TRUTH_KEY, device
-            )
-            all_records.extend(records)
+            jobs.append((dlpfc_dir / f"{sid}.h5ad", sid, N_CLUSTERS_DLPFC, GROUND_TRUTH_KEY))
     else:
-        print("\n  [WARN] No DLPFC processed data found — skipping DLPFC benchmark.")
+        print("  [WARN] No DLPFC processed data found — skipping.")
 
-    # ── Mouse Brain ────────────────────────────────────────────────────────
-    mb_path = ROOT / "data" / "processed" / "MouseBrain" / "mouse_brain.h5ad"
-    if mb_path.exists():
-        adata_mb = sc.read_h5ad(mb_path)
-        records = benchmark_slice(
-            adata_mb, "MouseBrain", N_CLUSTERS_MOUSE, None, device
-        )
-        all_records.extend(records)
-    else:
-        print("\n  [WARN] Mouse Brain data not found — skipping MouseBrain benchmark.")
+    extra_datasets = [
+        (ROOT / "data/processed/MouseBrain/mouse_brain.h5ad", "MouseBrain",         N_CLUSTERS_MOUSE, None),
+        (ROOT / "data/processed/MouseOB/mouse_ob.h5ad",       "MouseOB",            7,                None),
+        (ROOT / "data/processed/HumanBreastCancer/breast_cancer.h5ad", "HumanBreastCancer", 20, None),
+        (ROOT / "data/processed/STARmap/starmap.h5ad",         "STARmap",            7,                None),
+    ]
+    for path, sid, nc, gt in extra_datasets:
+        if path.exists():
+            jobs.append((path, sid, nc, gt))
+        else:
+            print(f"  [WARN] {sid} data not found — skipping.")
 
-    # ── Mouse Olfactory Bulb ──────────────────────────────────────────────
-    mob_path = ROOT / "data" / "processed" / "MouseOB" / "mouse_ob.h5ad"
-    if mob_path.exists():
-        adata_mob = sc.read_h5ad(mob_path)
-        records = benchmark_slice(
-            adata_mob, "MouseOB", 7, None, device
-        )
-        all_records.extend(records)
-    else:
-        print("\n  [WARN] Mouse OB data not found — skipping MOB benchmark.")
+    if not jobs:
+        print("\n  No datasets available. Exiting.")
+        return
 
-    # ── Human Breast Cancer ───────────────────────────────────────────────
-    hbc_path = ROOT / "data" / "processed" / "HumanBreastCancer" / "breast_cancer.h5ad"
-    if hbc_path.exists():
-        adata_hbc = sc.read_h5ad(hbc_path)
-        records = benchmark_slice(
-            adata_hbc, "HumanBreastCancer", 20, None, device
-        )
-        all_records.extend(records)
-    else:
-        print("\n  [WARN] Human Breast Cancer data not found — skipping HBC benchmark.")
+    # ── Define all (variant, runner) conditions ───────────────────────────
+    VARIANTS = [
+        ("Baseline",        "CauST-internal"),
+        ("CauST-Filter",    "CauST-internal"),
+        ("CauST-Reweight",  "CauST-internal"),
+        ("CauST-Full",      "CauST-internal"),
+        ("CauST-Full",      "STAGATE"),
+        ("CauST-Full",      "GraphST"),
+    ]
 
-    # ── STARmap ───────────────────────────────────────────────────────────
-    star_path = ROOT / "data" / "processed" / "STARmap" / "starmap.h5ad"
-    if star_path.exists():
-        adata_star = sc.read_h5ad(star_path)
-        records = benchmark_slice(
-            adata_star, "STARmap", 7, None, device
-        )
-        all_records.extend(records)
-    else:
-        print("\n  [WARN] STARmap data not found — skipping STARmap benchmark.")
+    total_conditions = len(jobs) * len(VARIANTS)
+    done_count = sum(
+        1 for (_, sid, _, _) in jobs for (v, m) in VARIANTS if is_done(df, sid, v, m)
+    )
+    remaining = total_conditions - done_count
+    print(f"\n  Total conditions: {total_conditions}  "
+          f"(already done: {done_count},  remaining: {remaining})")
 
-    if not all_records:
+    pbar = tqdm(total=total_conditions, desc="Benchmark", unit="cond",
+                initial=done_count)
+
+    for data_path, slice_id, n_clusters, gt_key in jobs:
+        print(f"\n{'='*50}")
+        print(f"  === {slice_id} ===")
+        print(f"{'='*50}")
+
+        adata = sc.read_h5ad(data_path)
+        print(f"  Loaded: {adata.n_obs} spots × {adata.n_vars} genes")
+
+        for variant, method in VARIANTS:
+            if is_done(df, slice_id, variant, method):
+                pbar.update(1)
+                continue
+
+            t0 = time.time()
+            print(f"\n  >> {variant} / {method}")
+
+            try:
+                if variant == "Baseline" and method == "CauST-internal":
+                    Z, labels = run_baseline(adata.copy(), n_clusters, device)
+                    df = evaluate_and_record(df, adata, slice_id, variant, method, Z, labels, gt_key)
+
+                elif method == "CauST-internal":
+                    fm_map = {
+                        "CauST-Filter":   "filter",
+                        "CauST-Reweight": "reweight",
+                        "CauST-Full":     "filter_and_reweight",
+                    }
+                    Z, labels = run_caust_variant(adata, n_clusters, fm_map[variant], device)
+                    df = evaluate_and_record(df, adata, slice_id, variant, method, Z, labels, gt_key)
+
+                elif method == "STAGATE":
+                    Z, labels = try_stagate(adata, device)
+                    if Z is not None:
+                        df = evaluate_and_record(df, adata, slice_id, variant, method, Z, labels, gt_key)
+                    else:
+                        print(f"    [skip] STAGATE not available")
+
+                elif method == "GraphST":
+                    Z, labels = try_graphst(adata, n_clusters, device)
+                    if Z is not None:
+                        df = evaluate_and_record(df, adata, slice_id, variant, method, Z, labels, gt_key)
+                    else:
+                        print(f"    [skip] GraphST not available")
+
+            except Exception as e:
+                print(f"    [FAILED] {variant}/{method}: {e}")
+
+            elapsed = time.time() - t0
+            print(f"    ({elapsed:.0f}s)")
+            pbar.update(1)
+
+    pbar.close()
+
+    if df.empty:
         print("\n  No results to save. Exiting.")
         return
 
-    # ── Save CSV ──────────────────────────────────────────────────────────
-    df = pd.DataFrame(all_records)
-    csv_path = OUTPUT_DIR / "all_results.csv"
-    df.to_csv(csv_path, index=False)
-    print(f"\n✓ Results saved: {csv_path}")
+    print(f"\n{'='*55}")
+    print(f"  ✓ All results saved: {CSV_PATH}")
+    print(f"{'='*55}")
     print(df.to_string(index=False))
 
-    # ── Plot ──────────────────────────────────────────────────────────────
+    # ── Generate plots ────────────────────────────────────────────────────
     try:
-        plot_benchmark_results(
-            results_df = df,
-            group_col  = "variant",
-            metric_col = "ari",
-            hue_col    = "method",
-            title      = "CauST Ablation — ARI across datasets",
-            out_path   = str(OUTPUT_DIR / "benchmark_ari.png"),
-        )
-        plot_benchmark_results(
-            results_df = df,
-            group_col  = "variant",
-            metric_col = "silhouette",
-            hue_col    = "method",
-            title      = "CauST Ablation — Silhouette across datasets",
-            out_path   = str(OUTPUT_DIR / "benchmark_silhouette.png"),
-        )
-        print("✓ Benchmark plots saved.")
+        for metric in ["ari", "silhouette"]:
+            if metric in df.columns:
+                plot_benchmark_results(
+                    results_df = df,
+                    group_col  = "variant",
+                    metric_col = metric,
+                    hue_col    = "method",
+                    title      = f"CauST Ablation — {metric.upper()} across datasets",
+                    out_path   = str(OUTPUT_DIR / f"benchmark_{metric}.png"),
+                )
+        print("  ✓ Benchmark plots saved.")
     except Exception as e:
         print(f"  [WARN] Plotting failed: {e}")
 

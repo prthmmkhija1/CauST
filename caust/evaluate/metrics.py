@@ -140,8 +140,22 @@ def evaluate_single_slice(
     results[f"{prefix}silhouette"] = compute_silhouette(latent_Z, labels_pred)
 
     if labels_true is not None:
-        results[f"{prefix}ari"] = compute_ari(labels_true, labels_pred)
-        results[f"{prefix}nmi"] = compute_nmi(labels_true, labels_pred)
+        # Drop spots whose ground-truth label is NaN/None (unannotated spots)
+        mask = pd.notna(labels_true)
+        if mask.all():
+            lt_clean = labels_true
+            lp_clean = labels_pred
+            z_clean  = latent_Z
+        else:
+            lt_clean = np.asarray(labels_true)[mask]
+            lp_clean = np.asarray(labels_pred)[mask]
+            z_clean  = np.asarray(latent_Z)[mask]
+
+        if len(np.unique(lt_clean)) >= 2:
+            results[f"{prefix}ari"] = compute_ari(lt_clean, lp_clean)
+            results[f"{prefix}nmi"] = compute_nmi(lt_clean, lp_clean)
+            # Recompute silhouette on annotated spots only when ground truth exists
+            results[f"{prefix}silhouette"] = compute_silhouette(z_clean, lp_clean)
 
     return results
 

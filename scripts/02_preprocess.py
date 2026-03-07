@@ -90,12 +90,39 @@ if __name__ == "__main__":
         out_dir = PROC / dataset
         print(f"\n{'─'*40}\nDataset: {dataset}")
 
-        # Files already placed directly in data/processed/ (e.g. via squidpy)
         raw_files = list(raw_dir.glob("**/*.h5ad")) + list(raw_dir.glob("**/*.h5")) \
             if raw_dir.exists() else []
         proc_files = list(out_dir.glob("**/*.h5ad")) if out_dir.exists() else []
 
-        if not raw_files and proc_files:
+        # Detect unprocessed files sitting in data/processed/ (downloaded raw)
+        needs_reprocess = False
+        if proc_files and not raw_files:
+            # Check if these "processed" files are actually raw (>5000 genes = not HVG-filtered)
+            sample = proc_files[0]
+            try:
+                adata_check = sc.read_h5ad(sample, backed="r")
+                if adata_check.n_vars > 5000:
+                    print(f"  [WARN] Files in {out_dir} appear unprocessed ({adata_check.n_vars} genes).")
+                    print(f"         Moving to {raw_dir} and re-processing …")
+                    needs_reprocess = True
+                    raw_dir.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    for pf in proc_files:
+                        dest = raw_dir / pf.name
+                        if not dest.exists():
+                            shutil.move(str(pf), str(dest))
+                    raw_files = list(raw_dir.glob("**/*.h5ad")) + list(raw_dir.glob("**/*.h5"))
+                    proc_files = []
+                    adata_check.file.close()
+                else:
+                    adata_check.file.close()
+                    print(f"  [ok] {len(proc_files)} file(s) already in {out_dir} — skipping re-processing.")
+                    continue
+            except Exception:
+                print(f"  [ok] {len(proc_files)} file(s) already in {out_dir} — skipping re-processing.")
+                continue
+
+        if not raw_files and proc_files and not needs_reprocess:
             print(f"  [ok] {len(proc_files)} file(s) already in {out_dir} — skipping re-processing.")
             continue
 
