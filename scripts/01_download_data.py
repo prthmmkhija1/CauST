@@ -94,93 +94,12 @@ def _dlpfc_file_is_valid(path) -> bool:
         return False
 
 
-def _convert_geo_dlpfc_to_h5ad(extract_dir: Path, out_dir: Path, slice_ids):
-    """
-    Walk the extracted GSE144136_RAW directory, find per-sample h5 matrix +
-    spatial folders, and write one h5ad per DLPFC slice.
-    Returns the number of slices successfully converted.
-    """
-    if not _HAS_SC:
-        print("  [SKIP] scanpy not installed – cannot convert GEO files.")
-        return 0
-
-    import gzip
-    import shutil
-
-    converted = 0
-    for sid in slice_ids:
-        out_path = out_dir / f"{sid}.h5ad"
-        if _dlpfc_file_is_valid(out_path):
-            print(f"  [skip] {sid}.h5ad already valid")
-            converted += 1
-            continue
-
-        # ── Locate the h5 matrix file for this slice ─────────────────────
-        # GEO archives are often named  {GSM}_{SID}_filtered_feature_bc_matrix.h5[.gz]
-        candidates = (
-            list(extract_dir.rglob(f"*{sid}*filtered_feature_bc_matrix.h5"))
-            + list(extract_dir.rglob(f"*{sid}*filtered_feature_bc_matrix.h5.gz"))
-            + list(extract_dir.rglob(f"*{sid}*.h5"))
-        )
-        if not candidates:
-            print(f"  [WARN] No h5 file found for slice {sid} in extracted archive")
-            continue
-
-        h5_path = candidates[0]
-
-        # Decompress .gz if needed
-        if str(h5_path).endswith(".gz"):
-            decompressed = h5_path.with_suffix("")
-            if not decompressed.exists():
-                with gzip.open(h5_path, "rb") as fin, open(decompressed, "wb") as fout:
-                    shutil.copyfileobj(fin, fout)
-            h5_path = decompressed
-
-        # ── Locate spatial folder ─────────────────────────────────────────
-        sample_dir = h5_path.parent
-        spatial_dir = sample_dir / "spatial"
-
-        if not spatial_dir.exists():
-            # Try extracting a *spatial*.tar.gz alongside the h5
-            spatial_tars = (
-                list(sample_dir.glob(f"*{sid}*spatial*.tar.gz"))
-                + list(sample_dir.glob("*spatial*.tar.gz"))
-            )
-            if spatial_tars:
-                with tarfile.open(spatial_tars[0], "r:gz") as tar:
-                    tar.extractall(sample_dir)
-                spatial_dir = sample_dir / "spatial"
-
-        try:
-            if spatial_dir.exists():
-                adata = sc.read_visium(
-                    path=sample_dir,
-                    count_file=h5_path.name,
-                    load_images=False,
-                )
-            else:
-                adata = sc.read_10x_h5(h5_path)
-                adata.var_names_make_unique()
-
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            adata.write_h5ad(out_path)
-            print(f"  {sid}: {adata.n_obs} spots × {adata.n_vars} genes → saved")
-            converted += 1
-        except Exception as exc:
-            print(f"  [WARN] Could not convert {sid}: {exc}")
-
-    return converted
-
-
-def _geo_ftp_list(accession: str) -> list:
-    """
-    Return filenames in the NCBI GEO FTP supplementary directory for *accession*.
-    Returns empty list if the directory is unreachable or empty.
-    """
+def _gsm_ftp_files(gsm_acc: str) -> list:
+    """List supplementary files in the NCBI FTP directory for a GSM sample."""
     import ftplib
-    digits = accession[3:]                        # "144136"
-    series_prefix = accession[:3] + digits[:-3] + "nnn"  # "GSE144nnn"
-    ftp_dir = f"/geo/series/{series_prefix}/{accession}/suppl/"
+    digits       = gsm_acc[3:]                           # e.g. "4284316"
+    gsm_prefix   = gsm_acc[:3] + digits[:-3] + "nnn"    # "GSM4284nnn"
+    ftp_dir      = f"/geo/samples/{gsm_prefix}/{gsm_acc}/suppl/"
     try:
         ftp = ftplib.FTP("ftp.ncbi.nlm.nih.gov", timeout=30)
         ftp.login()
@@ -188,55 +107,121 @@ def _geo_ftp_list(accession: str) -> list:
         ftp.quit()
         return names
     except Exception as exc:
-        print(f"  [FTP] Could not list {accession}/suppl/: {exc}")
+        print(f"  [FTP] Could not list {gsm_acc}/suppl/: {exc}")
         return []
 
 
-def _geo_download_raw_tar(accession: str, dest_dir: Path) -> Path | None:
+def _geo_gsm_for_slices(series_acc: str, slice_ids: list) -> dict:
     """
-    Auto-discover and download the RAW tarball for a GEO series.
-    Returns the local Path on success, None on failure.
+    Query the GEO soft text endpoint to map slice IDs → GSM accessions.
+    Returns {slice_id: gsm_accession} for each slice found.
     """
-    # Check if already downloaded
-    for ext in [".tar", ".tar.gz", ".tgz"]:
-        existing = dest_dir / f"{accession}_RAW{ext}"
-        if existing.exists():
-            print(f"  [skip] {existing.name} already on disk")
-            return existing
+    import urllib.request as req
+    url = (
+        f"https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi"
+        f"?acc={series_acc}&targ=gsm&form=text&view=brief"
+    )
+    try:
+        with req.urlopen(url, timeout=30) as resp:
+            text = resp.read().decode("utf-8", errors="ignore")
+    except Exception as exc:
+        print(f"  [GEO] Could not query sample list: {exc}")
+        return {}
 
-    print(f"  Querying NCBI GEO FTP for {accession} …")
-    names = _geo_ftp_list(accession)
-    if not names:
+    result      = {}
+    current_gsm = None
+    for line in text.splitlines():
+        if line.startswith("^SAMPLE = "):
+            current_gsm = line.split("= ", 1)[1].strip()
+        elif line.startswith("!Sample_title = ") and current_gsm:
+            title = line.split("= ", 1)[1].strip()
+            for sid in slice_ids:
+                if sid in title and sid not in result:
+                    result[sid] = current_gsm
+                    break
+    return result
+
+
+def _download_gsm_sample(gsm_acc: str, sid: str, dest_dir: Path) -> Path | None:
+    """
+    Download filtered_feature_bc_matrix.h5[.gz] (and optionally spatial.tar.gz)
+    for one GSM sample, decompress if needed, and return the local .h5 path.
+    """
+    import gzip
+    import shutil
+
+    files = _gsm_ftp_files(gsm_acc)
+    if not files:
         return None
 
-    # Find a RAW archive
-    raw_candidates = [
-        n for n in names
-        if "RAW" in os.path.basename(n).upper()
-        and os.path.basename(n).endswith((".tar", ".tar.gz", ".tgz"))
-    ]
-    if not raw_candidates:
-        basenames = [os.path.basename(n) for n in names]
-        print(f"  No RAW tar found under {accession}. Files: {basenames}")
+    bases = {os.path.basename(f): f for f in files}
+
+    # ── Download h5 matrix ────────────────────────────────────────────────
+    h5_candidates = [n for n in bases if n.endswith(".h5") or n.endswith(".h5.gz")]
+    if not h5_candidates:
+        print(f"  [WARN] No .h5 file in {gsm_acc}/suppl/: {list(bases.keys())}")
         return None
 
-    remote_path = raw_candidates[0]
-    fname       = os.path.basename(remote_path)
-    url  = f"https://ftp.ncbi.nlm.nih.gov{remote_path}"
-    dest = dest_dir / fname
-    print(f"  Found: {fname}")
-    return dest if download_file(url, dest) else None
+    h5_remote = bases[h5_candidates[0]]
+    h5_local  = dest_dir / h5_candidates[0]
+    if not h5_local.exists():
+        url = f"https://ftp.ncbi.nlm.nih.gov{h5_remote}"
+        if not download_file(url, h5_local):
+            return None
+
+    if str(h5_local).endswith(".gz"):
+        decompressed = h5_local.with_suffix("")
+        if not decompressed.exists():
+            with gzip.open(h5_local, "rb") as fin, open(decompressed, "wb") as fout:
+                shutil.copyfileobj(fin, fout)
+        h5_local = decompressed
+
+    # ── Download spatial archive (optional) ───────────────────────────────
+    spatial_candidates = [n for n in bases if "spatial" in n.lower() and n.endswith(".tar.gz")]
+    if spatial_candidates:
+        sp_remote = bases[spatial_candidates[0]]
+        sp_local  = dest_dir / spatial_candidates[0]
+        if not sp_local.exists():
+            url = f"https://ftp.ncbi.nlm.nih.gov{sp_remote}"
+            download_file(url, sp_local)   # best-effort; non-fatal
+        if sp_local.exists():
+            with tarfile.open(sp_local, "r:gz") as tar:
+                tar.extractall(dest_dir)
+
+    return h5_local
+
+
+def _convert_sample_to_h5ad(h5_path: Path, sample_dir: Path, sid: str, out_path: Path):
+    """Convert a single 10x h5 + optional spatial folder → h5ad."""
+    spatial_dir = sample_dir / "spatial"
+    if spatial_dir.exists():
+        adata = sc.read_visium(
+            path=sample_dir,
+            count_file=h5_path.name,
+            load_images=False,
+        )
+    else:
+        adata = sc.read_10x_h5(h5_path)
+        adata.var_names_make_unique()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    adata.write_h5ad(out_path)
+    print(f"  {sid}: {adata.n_obs} spots × {adata.n_vars} genes → saved")
+    return adata.n_obs
 
 
 def download_dlpfc():
     """
     Download the full DLPFC 10x Visium dataset from NCBI GEO (GSE144136).
 
-    The LIBD AWS S3 mirror only contains the 224-spot manually-annotated
-    subset.  For clustering benchmarks we need the complete tissue sections
-    (~3 400 spots each).  The full spaceranger output is at NCBI GEO under
-    accession GSE144136 (Maynard et al. 2021, Nature Neuroscience).
-    Auto-discovers the actual filename via FTP directory listing.
+    The LIBD AWS S3 mirror only contains 224-spot manually-annotated subsets.
+    Full tissue sections (~3 400 spots each) are in individual GSM sample
+    pages of GSE144136 (Maynard et al. 2021, Nature Neuroscience).
+
+    Strategy:
+      1. Query GEO soft text to map slice IDs → GSM accessions.
+      2. For each GSM, download filtered_feature_bc_matrix.h5[.gz] from
+         its FTP supplementary directory.
+      3. Convert to h5ad.
     """
     print("\n--- DLPFC (Human Brain) ---")
     dlpfc_dir = DATA_RAW / "DLPFC"
@@ -264,35 +249,51 @@ def download_dlpfc():
         return
     print(f"  {valid_raw}/12 valid slices found; fetching from NCBI GEO …")
 
-    # ── Try to auto-discover and download the RAW tar from GEO ─────────────
-    geo_tar = _geo_download_raw_tar("GSE144136", DATA_RAW)
-
-    if geo_tar is None:
+    # ── Find which GSM accession corresponds to each slice ───────────────────
+    print("  Querying GEO sample list for GSE144136 …")
+    gsm_map = _geo_gsm_for_slices("GSE144136", slice_ids)
+    if not gsm_map:
+        print("  [WARN] Could not retrieve sample list from GEO.")
         _print_dlpfc_manual_instructions(dlpfc_dir)
         return
+    print(f"  Found {len(gsm_map)}/12 sample mappings: {gsm_map}")
 
-    # ── Extract outer tar ────────────────────────────────────────────────────
-    extract_dir = DATA_RAW / (geo_tar.stem.replace(".tar", "") + "_raw")
-    extract_dir.mkdir(parents=True, exist_ok=True)
+    # ── Download + convert each sample ───────────────────────────────────────
+    converted = 0
+    for sid in slice_ids:
+        out_path = dlpfc_dir / f"{sid}.h5ad"
+        if _dlpfc_file_is_valid(out_path):
+            print(f"  [skip] {sid}.h5ad already valid")
+            converted += 1
+            continue
 
-    if not any(extract_dir.iterdir()):
-        print(f"  Extracting {geo_tar.name} …")
-        with tarfile.open(geo_tar) as tar:
-            tar.extractall(extract_dir)
-        print("  Extraction complete.")
+        if sid not in gsm_map:
+            print(f"  [WARN] No GSM found for slice {sid} – skipping")
+            continue
 
-        # Inner per-sample .tar.gz archives (common GEO pattern)
-        for inner in extract_dir.glob("*.tar.gz"):
-            sample_dir = extract_dir / inner.name.replace(".tar.gz", "")
-            sample_dir.mkdir(exist_ok=True)
-            with tarfile.open(inner, "r:gz") as t:
-                t.extractall(sample_dir)
+        gsm = gsm_map[sid]
+        sample_dl_dir = DATA_RAW / f"DLPFC_raw" / sid
+        sample_dl_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Convert to h5ad ───────────────────────────────────────────────────────
-    converted = _convert_geo_dlpfc_to_h5ad(extract_dir, dlpfc_dir, slice_ids)
+        print(f"  Downloading {sid} ({gsm}) …")
+        h5_path = _download_gsm_sample(gsm, sid, sample_dl_dir)
+        if h5_path is None:
+            print(f"  [WARN] Download failed for {sid}")
+            continue
+
+        if not _HAS_SC:
+            print("  [SKIP] scanpy not installed – cannot convert.")
+            continue
+
+        try:
+            _convert_sample_to_h5ad(h5_path, sample_dl_dir, sid, out_path)
+            converted += 1
+        except Exception as exc:
+            print(f"  [WARN] Conversion failed for {sid}: {exc}")
+
     if converted > 0:
         print(f"  DLPFC: {converted}/12 slices ready in {dlpfc_dir}")
-        print(f"  Run 02_preprocess.py next to generate processed files.")
+        print("  Run  python scripts/02_preprocess.py  next.")
     else:
         _print_dlpfc_manual_instructions(dlpfc_dir)
 
@@ -314,21 +315,21 @@ def _print_dlpfc_manual_instructions(dlpfc_dir: Path):
         "\n  ──────────────────────────────────────────────────────────────────\n"
         "  Automated DLPFC download failed.\n"
         "\n"
-        "  The full Visium data (~3 400 spots/slice) is at NCBI GEO accession\n"
-        "  GSE144136 (Maynard et al. 2021, Nature Neuroscience).\n"
+        "  The full Visium data (~3 400 spots/slice) is in individual SAMPLE\n"
+        "  pages of GEO series GSE144136 (Maynard et al. 2021).\n"
+        "  NOTE: the series-level file 'GSE144136_GRCh38-1.2.0_premrna.tar.gz'\n"
+        "  is a Cell Ranger genome reference — NOT count data.\n"
         "\n"
-        "  Step 1 – browse the GEO page and note the actual supplementary\n"
-        "           tar filename (look for a file ending in _RAW.tar):\n"
-        "    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
-        "\n"
-        "  Step 2 – download (replace FILENAME with what you found on the page):\n"
-        "    wget -P data/raw/ \\\n"
-        "      'https://ftp.ncbi.nlm.nih.gov/geo/series/GSE144nnn/GSE144136/suppl/FILENAME'\n"
-        "\n"
-        "  Step 3 – extract and convert:\n"
-        "    mkdir -p data/raw/GSE144136_RAW_raw\n"
-        "    tar xf data/raw/FILENAME -C data/raw/GSE144136_RAW_raw/\n"
-        "    python scripts/01_download_data.py   # converts .h5 → .h5ad\n"
+        "  Manual approach:\n"
+        "  1. Go to https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
+        "  2. Click a sample link (e.g. GSM4284316 for slice 151507)\n"
+        "  3. Scroll down to 'Supplementary file' and download:\n"
+        "       *_filtered_feature_bc_matrix.h5.gz\n"
+        "       *_spatial.tar.gz   (for spatial coordinates)\n"
+        "  4. Repeat for all 12 slices (151507-151510, 151669-151676)\n"
+        "  5. Place each h5[.gz] in  data/raw/DLPFC_raw/{slice_id}/\n"
+        "     and the extracted spatial/ folder alongside it\n"
+        "  6. Re-run: python scripts/01_download_data.py\n"
         "\n"
         "  Each converted file must have ≥1 000 spots.\n"
         f"  Target directory: {dlpfc_dir}\n"
