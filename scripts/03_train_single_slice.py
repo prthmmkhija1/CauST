@@ -28,7 +28,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 # ── CONFIG ────────────────────────────────────────────────────────────────
-SLICE_ID       = "151507"                    # which DLPFC slice to use
+# Auto-detect the first available DLPFC slice if the default is missing
+_DLPFC_DIR     = ROOT / "data" / "processed" / "DLPFC"
+_default_slice = "151507"
+if not (_DLPFC_DIR / f"{_default_slice}.h5ad").exists():
+    _avail = sorted(p.stem for p in _DLPFC_DIR.glob("*.h5ad")) if _DLPFC_DIR.exists() else []
+    _default_slice = _avail[0] if _avail else _default_slice
+
+SLICE_ID       = _default_slice              # which DLPFC slice to use
 N_CAUSAL_GENES = 500                         # genes to keep after filtering
 N_CLUSTERS     = 7                           # cortical layers in DLPFC
 EPOCHS         = 500

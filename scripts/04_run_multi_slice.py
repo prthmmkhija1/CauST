@@ -38,12 +38,16 @@ FILTER_MODE      = "filter_and_reweight"
 GROUND_TRUTH_KEY = "layer_guess"
 
 DONOR_MAP = {
+    # Original spatialLIBD IDs (12-section dataset)
     "151507": "Donor1", "151508": "Donor1",
     "151509": "Donor1", "151510": "Donor1",
     "151669": "Donor2", "151670": "Donor2",
     "151671": "Donor2", "151672": "Donor2",
     "151673": "Donor3", "151674": "Donor3",
     "151675": "Donor3", "151676": "Donor3",
+    # GEO patient/replicate IDs (4-section dataset)
+    "P4_rep1": "DonorP4", "P4_rep2": "DonorP4",
+    "P6_rep1": "DonorP6", "P6_rep2": "DonorP6",
 }
 
 OUTPUT_DIR = ROOT / "experiments" / "results" / "multi_slice"

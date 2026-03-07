@@ -219,61 +219,40 @@ def _split_mtx_to_h5ad(dl_dir: Path, out_dir: Path, slice_ids: list) -> int:
 
 def download_dlpfc():
     """
-    Download the full DLPFC 10x Visium dataset from NCBI GEO (GSE144136).
+    Download DLPFC Visium sections by delegating to scripts/get_dlpfc.py.
 
-    The LIBD AWS S3 mirror only contains 224-spot manually-annotated subsets.
-    The series-level tar (GSE144136_GRCh38-1.2.0_premrna.tar.gz) is a Cell
-    Ranger genome reference, NOT count data.
-
-    The actual count data is in three series-level supplementary files:
-      - GSE144136_GeneBarcodeMatrix_Annotated.mtx.gz  (combined sparse matrix)
-      - GSE144136_CellNames.csv.gz   (barcodes with embedded slice IDs)
-      - GSE144136_GeneNames.csv.gz   (gene symbols)
-
-    Strategy: download these 3 files, load the combined matrix, split by
-    slice ID, and save per-slice h5ad files (~3 400 spots each).
+    GEO accession GSE144239 (Maynard et al. 2021) provides 4 Visium sections
+    (P4_rep1, P4_rep2, P6_rep1, P6_rep2).  The full 12-section dataset
+    (IDs 151507-151676) is hosted by LIBD's spatialLIBD R package, not GEO.
     """
     print("\n--- DLPFC (Human Brain) ---")
     dlpfc_dir = DATA_RAW / "DLPFC"
     dlpfc_dir.mkdir(parents=True, exist_ok=True)
-    proc_dir = ROOT / "data" / "processed" / "DLPFC"
-    proc_dir.mkdir(parents=True, exist_ok=True)
 
-    slice_ids = [
-        "151507", "151508", "151509", "151510",
-        "151669", "151670", "151671", "151672",
-        "151673", "151674", "151675", "151676",
-    ]
-
-    # ── Remove stale 224-spot raw files ──────────────────────────────────────
-    for sid in slice_ids:
-        raw_path = dlpfc_dir / f"{sid}.h5ad"
-        if raw_path.exists() and not _dlpfc_file_is_valid(raw_path):
-            print(f"  [stale] Removing {sid}.h5ad – only {_dlpfc_obs(raw_path)} spots")
-            raw_path.unlink()
-
-    # ── Short-circuit if all 12 valid slices already present ─────────────────
-    valid_raw = sum(1 for s in slice_ids if _dlpfc_file_is_valid(dlpfc_dir / f"{s}.h5ad"))
-    if valid_raw == 12:
-        print(f"  [skip] All 12 DLPFC slices already valid in {dlpfc_dir}")
-        return
-    print(f"  {valid_raw}/12 valid slices found; fetching from NCBI GEO …")
-
-    # ── Download the three series-level files ────────────────────────────────
-    dl_dir = DATA_RAW / "DLPFC_geo"
-    dl_dir.mkdir(parents=True, exist_ok=True)
-
-    if not _download_dlpfc_geo_files(dl_dir):
-        _print_dlpfc_manual_instructions(dlpfc_dir)
+    # Check for ANY valid h5ad files (new P4/P6 names or old 151xxx names)
+    existing = list(dlpfc_dir.glob("*.h5ad"))
+    valid = [p for p in existing if _dlpfc_file_is_valid(p)]
+    if len(valid) >= 4:
+        names = [p.stem for p in valid]
+        print(f"  [skip] {len(valid)} DLPFC sections already valid: {names}")
         return
 
-    # ── Split combined matrix into per-slice h5ad ────────────────────────────
-    converted = _split_mtx_to_h5ad(dl_dir, dlpfc_dir, slice_ids)
-    if converted > 0:
-        print(f"  DLPFC: {converted}/12 slices ready in {dlpfc_dir}")
-        print("  Run  python scripts/02_preprocess.py  next.")
-    else:
-        _print_dlpfc_manual_instructions(dlpfc_dir)
+    # Remove stale 224-spot files
+    for p in existing:
+        if not _dlpfc_file_is_valid(p):
+            obs = _dlpfc_obs(p)
+            print(f"  [stale] Removing {p.name} – only {obs} spots")
+            p.unlink()
+
+    print("  Delegating to scripts/get_dlpfc.py …")
+    # Import and run the download logic
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "get_dlpfc", ROOT / "scripts" / "get_dlpfc.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    mod.main()
 
 
 def _dlpfc_obs(path) -> int:
@@ -293,20 +272,12 @@ def _print_dlpfc_manual_instructions(dlpfc_dir: Path):
         "\n  ──────────────────────────────────────────────────────────────────\n"
         "  Automated DLPFC download failed.\n"
         "\n"
-        "  The data is at GEO series GSE144136. Download these 3 files:\n"
-        "    https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE144136\n"
+        "  Run the standalone download script:\n"
+        "    python scripts/get_dlpfc.py\n"
         "\n"
-        "  1. GSE144136_GeneBarcodeMatrix_Annotated.mtx.gz  (413 MB)\n"
-        "  2. GSE144136_CellNames.csv.gz\n"
-        "  3. GSE144136_GeneNames.csv.gz\n"
+        "  Data source: GEO GSE144239 (Maynard et al. 2021, Nat Neuroscience)\n"
+        "  GEO provides 4 Visium sections (P4_rep1, P4_rep2, P6_rep1, P6_rep2).\n"
         "\n"
-        "  Place all three in: data/raw/DLPFC_geo/\n"
-        "  Then re-run: python scripts/01_download_data.py\n"
-        "\n"
-        "  NOTE: the 10 GB file GSE144136_GRCh38-1.2.0_premrna.tar.gz\n"
-        "  is a Cell Ranger genome reference — NOT count data. Do NOT download it.\n"
-        "\n"
-        "  Each converted slice must have ≥1 000 spots.\n"
         f"  Target directory: {dlpfc_dir}\n"
         "  Then run: python scripts/02_preprocess.py\n"
         "  ──────────────────────────────────────────────────────────────────\n"
