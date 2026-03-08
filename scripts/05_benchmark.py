@@ -32,7 +32,7 @@ Results saved as:  experiments/results/benchmark/all_results.csv
 Figures saved as:  experiments/results/benchmark/benchmark_*.png
 """
 
-import sys, json, time
+import sys, json, time, gc
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -243,6 +243,7 @@ def main():
         print(f"  Loaded: {adata.n_obs} spots × {adata.n_vars} genes")
 
         for variant, method in VARIANTS:
+
             if is_done(df, slice_id, variant, method):
                 pbar.update(1)
                 continue
@@ -285,6 +286,10 @@ def main():
             print(f"    ({elapsed:.0f}s)")
             pbar.update(1)
 
+        # Release h5ad file handles and model memory before loading next dataset
+        del adata
+        gc.collect()
+
     pbar.close()
 
     if df.empty:
@@ -311,6 +316,14 @@ def main():
         print("  ✓ Benchmark plots saved.")
     except Exception as e:
         print(f"  [WARN] Plotting failed: {e}")
+
+    # Final cleanup to prevent segfault during interpreter shutdown
+    gc.collect()
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
