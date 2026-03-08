@@ -434,7 +434,8 @@ class CauST:
         if in_dim is None:
             # Fallback: infer from saved weights
             state = torch.load(directory / "caust_model.pt", map_location="cpu")
-            for key in ("encoder.conv1.lin_src.weight", "encoder.conv1.lin.weight"):
+            for key in ("encoder.conv1.lin_src.weight", "encoder.conv1.lin.weight",
+                        "encoder.conv1.lin_l.weight", "encoder.conv1.weight"):
                 if key in state:
                     in_dim = state[key].shape[1]
                     break
@@ -454,8 +455,9 @@ class CauST:
             latent_dim = config["latent_dim"],
         )
         model.load_state_dict(
-            torch.load(directory / "caust_model.pt", map_location="cpu")
+            torch.load(directory / "caust_model.pt", map_location=obj.device)
         )
+        model = model.to(obj.device)
         obj._model = model
 
         with open(directory / "causal_scores.json") as f:
