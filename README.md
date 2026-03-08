@@ -195,10 +195,15 @@ CauST/
 │   ├── test_intervention.py
 │   ├── test_scorer.py
 │   ├── test_metrics.py
+│   ├── test_filter.py
 │   └── test_pipeline.py
 │
 ├── tutorials/                  ← Jupyter notebooks
-│   └── 01_quickstart.ipynb
+│   ├── 01_quickstart.ipynb
+│   ├── 02_custom_data.ipynb
+│   ├── 03_integration_STAGATE.ipynb
+│   ├── 04_cross_slice_evaluation.ipynb
+│   └── 05_causal_gene_exploration.ipynb
 │
 ├── data/                       ← gitignored; created by scripts
 │   ├── raw/
