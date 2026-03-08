@@ -19,13 +19,12 @@ physically close share information, which is exactly how tissue regions
 work biologically (a cell is influenced by its immediate environment).
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.data import Data
 from torch_geometric.nn import GATConv
 
 

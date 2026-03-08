@@ -13,7 +13,7 @@ Metrics implemented
 All functions are pure (no side effects) and return plain Python floats.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd

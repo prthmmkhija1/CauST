@@ -17,12 +17,11 @@ Plots implemented
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 
 import matplotlib
 matplotlib.use("Agg")   # non-interactive backend — safe for scripts
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 import seaborn as sns

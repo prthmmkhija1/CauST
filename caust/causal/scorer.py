@@ -23,7 +23,7 @@ Two complementary scoring strategies are implemented:
    Much faster (~100× vs perturbation) but less precise.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import scipy.sparse as sp

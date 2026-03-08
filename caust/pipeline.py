@@ -26,7 +26,6 @@ sklearn-style API:  fit / transform / fit_transform
 """
 
 import json
-import pickle
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -396,6 +395,10 @@ class CauST:
         with open(directory / "causal_scores.json", "w") as f:
             json.dump(self._causal_scores, f, indent=2)
 
+        if self._gene_names is not None:
+            with open(directory / "gene_names.json", "w") as f:
+                json.dump(list(self._gene_names), f)
+
         config = dict(
             n_causal_genes = self.n_causal_genes,
             alpha          = self.alpha,
@@ -415,7 +418,7 @@ class CauST:
         print(f"[CauST] Model saved → {directory}")
 
     @classmethod
-    def load(cls, directory: Union[str, Path], n_genes: int | None = None) -> "CauST":
+    def load(cls, directory: Union[str, Path], n_genes: Optional[int] = None) -> "CauST":
         """
         Load a previously saved CauST model.
 
@@ -462,6 +465,11 @@ class CauST:
 
         with open(directory / "causal_scores.json") as f:
             obj._causal_scores = json.load(f)
+
+        gene_names_path = directory / "gene_names.json"
+        if gene_names_path.exists():
+            with open(gene_names_path) as f:
+                obj._gene_names = json.load(f)
 
         obj._fitted = True
         print(f"[CauST] Model loaded ← {directory}")

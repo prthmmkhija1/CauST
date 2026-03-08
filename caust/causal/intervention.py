@@ -22,7 +22,7 @@ This is the most principled approach because:
 Reference: Pearl J. (2009) "Causality: Models, Reasoning and Inference"
 """
 
-from typing import List, Literal, Union
+from typing import List, Literal
 
 import numpy as np
 

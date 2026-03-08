@@ -13,8 +13,7 @@ Install
     # GraphST: see https://github.com/JinmiaoChenLab/GraphST
 """
 
-import warnings
-from typing import List, Optional
+from typing import Optional
 
 import scanpy as sc
 import torch
