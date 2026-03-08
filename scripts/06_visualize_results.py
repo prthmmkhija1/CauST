@@ -72,15 +72,20 @@ def fig_per_slice(df, out_dir):
 
 
 def fig_benchmark_grouped(df, out_dir):
-    """Grouped bar chart: variant × method for ARI."""
-    if "ari" not in df.columns or "variant" not in df.columns:
+    """Grouped bar chart: variant × method for available metrics."""
+    if "variant" not in df.columns:
+        return
+    # Plot whichever metrics are available (ari requires ground truth; silhouette always present)
+    available_metrics = [m for m in ["ari", "silhouette"] if m in df.columns]
+    if not available_metrics:
         return
     try:
         import seaborn as sns
-        fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-        for ax, metric in zip(axes, ["ari", "silhouette"]):
-            if metric not in df.columns:
-                continue
+        fig, axes = plt.subplots(1, len(available_metrics),
+                                 figsize=(6 * len(available_metrics), 4),
+                                 squeeze=False)
+        axes = axes[0]
+        for ax, metric in zip(axes, available_metrics):
             sns.barplot(data=df, x="variant", y=metric,
                         hue="method" if "method" in df.columns else None,
                         ax=ax, capsize=0.1)
@@ -93,11 +98,12 @@ def fig_benchmark_grouped(df, out_dir):
         plt.close(fig)
         print(f"  Saved: {path.name}")
     except ImportError:
-        # fallback without seaborn
+        # fallback without seaborn — use first available metric
+        metric = available_metrics[0]
         fig, ax = plt.subplots(figsize=(8, 4))
-        _bar_with_error(ax, df, "ari", "Benchmark ARI", "ARI")
+        _bar_with_error(ax, df, metric, f"Benchmark {metric.upper()}", metric.upper())
         plt.tight_layout()
-        path = out_dir / "benchmark_ari_simple.png"
+        path = out_dir / "benchmark_grouped_simple.png"
         fig.savefig(path, dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"  Saved: {path.name}")
