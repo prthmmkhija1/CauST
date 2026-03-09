@@ -6,7 +6,7 @@ data/processed/
 *.loom
 
 # ── Experiment outputs ────────────────────────────────────────
-experiments/results/
+# experiments/results/ is intentionally NOT ignored — CSVs/JSONs/PNGs are tracked
 experiments/models/
 
 # ── Python ────────────────────────────────────────────────────
