@@ -39,10 +39,10 @@ The resulting causal gene list then feeds into state-of-the-art spatial domain d
 | Mouse Brain         | **0.281** | 0.275        | 0.263          | 0.250      |
 | Mouse Olf. Bulb     | 0.365     | 0.329        | 0.336          | **0.366**  |
 | Human Breast Cancer | 0.249     | 0.235        | **0.253**      | **0.259**  |
-| STARmap             | 0.154     | 0.152        | 0.150          | 0.149      |
+| STARmap             | 0.154     | 0.152        | 0.150          | **0.163**  |
 
 **Bold** = CauST variant outperforms Baseline.  
-CauST-Full (filter + reweight) improves over Baseline in 4/8 datasets, with the strongest gains on Human Breast Cancer (+4.0%) and Mouse Olfactory Bulb (+0.3%).
+CauST-Full (filter + reweight) improves over Baseline in 5/8 datasets, with the strongest gains on STARmap (+5.8%), Human Breast Cancer (+4.0%) and Mouse Olfactory Bulb (+0.3%).
 
 ### LODO (Leave-One-Donor-Out) — Cross-Donor Generalization
 
