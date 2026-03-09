@@ -32,13 +32,13 @@ Results saved as:  experiments/results/benchmark/all_results.csv
 Figures saved as:  experiments/results/benchmark/benchmark_*.png
 """
 
-import sys, json, time, gc
+import argparse, sys, json, time, gc
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-# ── CONFIG ────────────────────────────────────────────────────────────────
+# ── CONFIG (defaults — overridable via --config YAML) ─────────────────────
 N_CAUSAL_GENES   = 500
 N_CLUSTERS_DLPFC = 7
 N_CLUSTERS_MOUSE = 10
@@ -48,6 +48,31 @@ GROUND_TRUTH_KEY = "layer_guess"
 OUTPUT_DIR       = ROOT / "experiments" / "results" / "benchmark"
 CSV_PATH         = OUTPUT_DIR / "all_results.csv"
 # ─────────────────────────────────────────────────────────────────────────
+
+def _load_config():
+    """Parse --config flag and override globals from YAML if provided."""
+    parser = argparse.ArgumentParser(description="CauST benchmark / ablation study")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to a YAML config file that overrides defaults.")
+    args = parser.parse_args()
+    if args.config:
+        import yaml
+        with open(args.config) as f:
+            cfg = yaml.safe_load(f)
+        global N_CAUSAL_GENES, N_CLUSTERS_DLPFC, N_CLUSTERS_MOUSE
+        global EPOCHS, SCORING_METHOD, GROUND_TRUTH_KEY
+        causal = cfg.get("causal", {})
+        model  = cfg.get("model", {})
+        dataset = cfg.get("dataset", {})
+        N_CAUSAL_GENES   = causal.get("n_causal_genes", N_CAUSAL_GENES)
+        N_CLUSTERS_DLPFC = dataset.get("n_clusters_dlpfc", N_CLUSTERS_DLPFC)
+        N_CLUSTERS_MOUSE = dataset.get("n_clusters_mouse", N_CLUSTERS_MOUSE)
+        EPOCHS           = model.get("epochs", EPOCHS)
+        SCORING_METHOD   = causal.get("scoring_method", SCORING_METHOD)
+        GROUND_TRUTH_KEY = dataset.get("ground_truth_key", GROUND_TRUTH_KEY)
+        print(f"  [config] Loaded overrides from {args.config}")
+
+_load_config()
 
 import scanpy as sc
 import pandas as pd

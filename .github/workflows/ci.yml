@@ -27,7 +27,7 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install torch-geometric
           pip install -e ".[dev]"
-          pip install pytest
+          pip install pytest pytest-cov
 
-      - name: Run tests
-        run: pytest tests/ -v
+      - name: Run tests with coverage
+        run: pytest tests/ -v --cov=caust --cov-report=term-missing

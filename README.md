@@ -1,5 +1,7 @@
 # CauST — Causal Gene Discovery for Spatial Transcriptomics
 
+[![CI](https://github.com/prthmmkhija1/CauST/actions/workflows/ci.yml/badge.svg)](https://github.com/prthmmkhija1/CauST/actions/workflows/ci.yml)
+
 > **GSoC 2026 project — UCSC OSPO / UC Irvine**  
 > Implementer: **Pratham Makhija** · [GitHub](https://github.com/prthmmkhija1/CauST)  
 > Mentor: **Lijinghua Zhang**, PhD, UC Irvine
@@ -281,6 +283,16 @@ CauST/
 - Pearl (2009) — _Causality: Models, Reasoning, and Inference_
 - Arjovsky et al. (2019) — Invariant Risk Minimization (IRM)
 - Maynard et al. (2021) — DLPFC spatial transcriptomics dataset
+
+---
+
+## Limitations & Future Work
+
+- **Absolute ARI scores are low** because CauST uses a lightweight GAT + KMeans pipeline for domain identification. The important comparison is the _relative_ improvement from causal gene selection vs baseline HVG usage — CauST-Full outperforms Baseline in 5 out of 8 datasets. Integrating CauST's gene selection into more sophisticated backends (STAGATE with mclust, BayesSpace) is expected to improve absolute metrics.
+- **Single-slice mode** has no cross-validation: invariance scoring requires 2+ slices. For single slices, only perturbation-based causal scores are available.
+- **Per-slice models**: CauST currently trains a separate autoencoder per slice. A shared pretrained encoder across slices would reduce compute time and enable better transfer.
+- **Clustering**: KMeans is a simple baseline. Future work could integrate model-based clustering (mclust, Gaussian mixture) or leverage existing domain detection models directly.
+- **Scalability**: Full perturbation scoring iterates over all genes; the hybrid gradient+perturbation mode mitigates this, but very large gene panels (>10K) may still be slow.
 
 ---
 
