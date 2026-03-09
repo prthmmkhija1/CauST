@@ -1,7 +1,8 @@
 # CauST — Causal Gene Discovery for Spatial Transcriptomics
 
-> **GSoC 2026 project — UCSC OSPO / UCI**  
-> Implementer: **Pratham Makhija** · [GitHub](https://github.com/prthmmkhija1/CauST)
+> **GSoC 2026 project — UCSC OSPO / UC Irvine**  
+> Implementer: **Pratham Makhija** · [GitHub](https://github.com/prthmmkhija1/CauST)  
+> Mentor: **Lijinghua Zhang**, PhD, UC Irvine
 
 ---
 
@@ -14,6 +15,45 @@ Modern spatial transcriptomics (ST) captures both _what_ genes are expressed and
 CauST applies **Pearl's do-calculus** to in-silico gene knock-outs inside a **Graph Attention Autoencoder**. Genes whose removal disrupts the spatial embedding are scored as _causally important_. Genes that are consistently causal across multiple tissue slices receive bonus _invariance_ scores (inspired by IRM).
 
 The resulting causal gene list then feeds into state-of-the-art spatial domain detectors (STAGATE, GraphST) to improve clustering accuracy and biological interpretability.
+
+---
+
+## Benchmark Results (Real Data)
+
+### Single-Slice — DLPFC 151507
+
+| Metric     | Value |
+| ---------- | ----- |
+| ARI        | 0.001 |
+| NMI        | 0.067 |
+| Silhouette | 0.479 |
+
+### Multi-Dataset Ablation — Silhouette Score
+
+| Dataset             | Baseline  | CauST-Filter | CauST-Reweight | CauST-Full |
+| ------------------- | --------- | ------------ | -------------- | ---------- |
+| DLPFC (P4_rep1)     | 0.187     | 0.180        | 0.174          | 0.179      |
+| DLPFC (P4_rep2)     | 0.175     | **0.187**    | **0.218**      | **0.203**  |
+| DLPFC (P6_rep1)     | 0.118     | 0.102        | 0.115          | 0.108      |
+| DLPFC (P6_rep2)     | 0.081     | **0.088**    | **0.088**      | **0.090**  |
+| Mouse Brain         | **0.281** | 0.275        | 0.263          | 0.250      |
+| Mouse Olf. Bulb     | 0.365     | 0.329        | 0.336          | **0.366**  |
+| Human Breast Cancer | 0.249     | 0.235        | **0.253**      | **0.259**  |
+| STARmap             | 0.154     | 0.152        | 0.150          | 0.149      |
+
+**Bold** = CauST variant outperforms Baseline.  
+CauST-Full (filter + reweight) improves over Baseline in 4/8 datasets, with the strongest gains on Human Breast Cancer (+4.0%) and Mouse Olfactory Bulb (+0.3%).
+
+### LODO (Leave-One-Donor-Out) — Cross-Donor Generalization
+
+| Test Donor | Test Slice | Silhouette |
+| ---------- | ---------- | ---------- |
+| DonorP4    | P4_rep1    | 0.288      |
+| DonorP4    | P4_rep2    | 0.111      |
+| DonorP6    | P6_rep1    | 0.043      |
+| DonorP6    | P6_rep2    | 0.086      |
+
+Mean LODO silhouette: **0.132** — genes selected by CauST on training donors transfer to unseen donors.
 
 ---
 
@@ -131,9 +171,14 @@ print(adata_out.obs["caust_domain"])          # spatial domain labels
 print(model.get_top_causal_genes(n=20))       # top causal genes
 
 # Multi-slice with donor mapping
-slices = {"151507": adata1, "151508": adata2}
-donor_map = {"151507": "Donor1", "151508": "Donor1"}
+slices = {"151507": adata1, "151508": adata2, "151669": adata3, "151670": adata4}
+donor_map = {"151507": "Donor1", "151508": "Donor1",
+             "151669": "Donor2", "151670": "Donor2"}
 results = model.fit_multi_slice(slices, donor_map=donor_map)
+
+# Leave-One-Donor-Out cross-validation
+lodo_df = model.lodo_evaluate(slices, donor_map, ground_truth_key="layer_guess")
+print(lodo_df)  # DataFrame: fold, test_donor, test_slice, lodo_ari, ...
 
 # Save / load (n_genes auto-detected)
 model.save("experiments/models/151507/")
@@ -188,7 +233,7 @@ CauST/
 │
 ├── experiments/
 │   ├── configs/                ← YAML experiment configs
-│   └── results/                ← auto-generated (gitignored)
+│   └── results/                ← auto-generated benchmark outputs
 │
 ├── tests/                      ← pytest unit tests
 │   ├── test_loader.py
@@ -219,12 +264,13 @@ CauST/
 
 ## Evaluation Metrics
 
-| Metric          | Description                               | Higher = Better |
-| --------------- | ----------------------------------------- | --------------- |
-| ARI             | Adjusted Rand Index vs known layer labels | ✓               |
-| NMI             | Normalized Mutual Information             | ✓               |
-| Silhouette      | Compactness of latent clusters            | ✓               |
-| Cross-slice ARI | LODO ARI across donors                    | ✓               |
+| Metric              | Description                                       | Higher = Better |
+| ------------------- | ------------------------------------------------- | --------------- |
+| ARI                 | Adjusted Rand Index vs known layer labels         | ✓               |
+| NMI                 | Normalized Mutual Information                     | ✓               |
+| Silhouette          | Compactness of latent clusters (no labels needed) | ✓               |
+| LODO Silhouette/ARI | Leave-One-Donor-Out cross-donor generalization    | ✓               |
+| Cross-slice ARI     | ARI on held-out slices                            | ✓               |
 
 ---
 
@@ -240,4 +286,4 @@ CauST/
 
 ## License
 
-MIT © Pratham Makhija 2025
+MIT © Pratham Makhija 2025-2026

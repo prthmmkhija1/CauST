@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "caust"
+version = "0.1.0"
+description = "CauST: Causal Gene Discovery for Spatial Transcriptomics via Graph Attention Autoencoders and Perturbation-Based Scoring"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Pratham Makhija", email = "pratham.makhija.ug23@nsut.ac.in"},
+]
+keywords = [
+    "spatial-transcriptomics",
+    "causal-inference",
+    "graph-neural-networks",
+    "single-cell",
+    "bioinformatics",
+    "do-calculus",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "torch>=2.0.0",
+    "torch-geometric>=2.3.0",
+    "scanpy>=1.9.6",
+    "squidpy>=1.2.3",
+    "anndata>=0.9.2",
+    "numpy>=1.24.0",
+    "pandas>=1.5.3",
+    "scipy>=1.10.0",
+    "scikit-learn>=1.2.2",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.2",
+    "tqdm>=4.65.0",
+    "pyyaml>=6.0",
+    "h5py>=3.8.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.3.0", "statsmodels>=0.14.0"]
+
+[project.urls]
+Homepage = "https://github.com/prthmmkhija1/CauST"
+Repository = "https://github.com/prthmmkhija1/CauST"
+Issues = "https://github.com/prthmmkhija1/CauST/issues"
+
+[tool.setuptools.packages.find]
+exclude = ["tests*", "scripts*", "experiments*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"

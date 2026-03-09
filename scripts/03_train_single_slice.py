@@ -28,6 +28,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 # ── CONFIG ────────────────────────────────────────────────────────────────
+# Override defaults by passing a YAML config:
+#   python scripts/03_train_single_slice.py --config experiments/configs/dlpfc_single_slice.yaml
+
 # Auto-detect the first available DLPFC slice if the default is missing
 _DLPFC_DIR     = ROOT / "data" / "processed" / "DLPFC"
 _default_slice = "151507"
@@ -47,6 +50,35 @@ GROUND_TRUTH_KEY = "layer_guess"             # obs column with known labels
                                              # set to None if unavailable
 OUTPUT_DIR     = ROOT / "experiments" / "results" / "single_slice"
 MODEL_SAVE_DIR = ROOT / "experiments" / "models" / SLICE_ID
+
+# ── Apply YAML config overrides ──────────────────────────────────────────
+import argparse
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--config", type=str, default=None)
+_args, _ = _parser.parse_known_args()
+
+if _args.config:
+    import yaml
+    _cfg_path = Path(_args.config)
+    if not _cfg_path.is_absolute():
+        _cfg_path = ROOT / _cfg_path
+    with open(_cfg_path) as _f:
+        _cfg = yaml.safe_load(_f)
+    _ds  = _cfg.get("dataset", {})
+    _mdl = _cfg.get("model", {})
+    _csl = _cfg.get("causal", {})
+    _flt = _cfg.get("filter", {})
+    SLICE_ID       = _ds.get("slice_id", SLICE_ID)
+    N_CLUSTERS     = _ds.get("n_clusters", N_CLUSTERS)
+    GROUND_TRUTH_KEY = _ds.get("ground_truth_key", GROUND_TRUTH_KEY)
+    EPOCHS         = _mdl.get("epochs", EPOCHS)
+    LR             = _mdl.get("lr", LR)
+    SCORING_METHOD = _csl.get("scoring_method", SCORING_METHOD)
+    N_CAUSAL_GENES = _csl.get("n_causal_genes", N_CAUSAL_GENES)
+    ALPHA          = _csl.get("alpha", ALPHA)
+    FILTER_MODE    = _flt.get("mode", FILTER_MODE)
+    MODEL_SAVE_DIR = ROOT / "experiments" / "models" / SLICE_ID
+    print(f"[config] Loaded overrides from: {_cfg_path.name}")
 # ─────────────────────────────────────────────────────────────────────────
 
 import scanpy as sc
