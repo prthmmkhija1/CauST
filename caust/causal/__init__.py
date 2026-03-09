@@ -8,6 +8,7 @@ from caust.causal.scorer import (
 from caust.causal.invariance import (
     compute_invariance_scores,
     combine_causal_and_invariance,
+    lodo_splits,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "cluster_latent",
     "compute_invariance_scores",
     "combine_causal_and_invariance",
+    "lodo_splits",
 ]

@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import numpy as np
 import pytest
 import anndata as ad
+import pandas as pd
 from scipy.sparse import csr_matrix
 
 from caust import CauST
@@ -152,3 +153,40 @@ class TestMultiSlice:
         )
         model.fit_multi_slice(slices, donor_map=donor_map)
         assert hasattr(model, "_cross_donor_corr")
+
+
+class TestLODO:
+    def test_lodo_evaluate_returns_dataframe(self):
+        slices = {
+            "S1": _make_adata(60, 80, seed=10),
+            "S2": _make_adata(60, 80, seed=11),
+            "S3": _make_adata(60, 80, seed=12),
+            "S4": _make_adata(60, 80, seed=13),
+        }
+        donor_map = {"S1": "D1", "S2": "D1", "S3": "D2", "S4": "D2"}
+        model = CauST(
+            n_causal_genes=20, n_clusters=3, epochs=5,
+            scoring_method="gradient", verbose=False,
+        )
+        df = model.lodo_evaluate(slices, donor_map)
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 4  # 2 folds × 2 test slices each
+        assert "test_donor" in df.columns
+        assert "test_slice" in df.columns
+        assert "lodo_silhouette" in df.columns
+
+    def test_lodo_results_stored(self):
+        slices = {
+            "A": _make_adata(60, 80, seed=20),
+            "B": _make_adata(60, 80, seed=21),
+            "C": _make_adata(60, 80, seed=22),
+            "D": _make_adata(60, 80, seed=23),
+        }
+        donor_map = {"A": "D1", "B": "D1", "C": "D2", "D": "D2"}
+        model = CauST(
+            n_causal_genes=20, n_clusters=3, epochs=5,
+            scoring_method="gradient", verbose=False,
+        )
+        model.lodo_evaluate(slices, donor_map)
+        assert hasattr(model, "_lodo_results")
+        assert len(model._lodo_results) > 0

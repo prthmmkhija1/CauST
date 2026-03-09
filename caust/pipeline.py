@@ -34,7 +34,7 @@ import torch
 
 import scanpy as sc
 
-from caust.causal.invariance import combine_causal_and_invariance, compute_invariance_scores
+from caust.causal.invariance import combine_causal_and_invariance, compute_invariance_scores, lodo_splits
 from caust.causal.scorer import (
     cluster_latent,
     compute_gradient_causal_scores,
@@ -348,6 +348,120 @@ class CauST:
         Fit on adata, then transform it.  Equivalent to fit(adata).transform(adata).
         """
         return self.fit(adata).transform(adata)
+
+    def lodo_evaluate(
+        self,
+        slices: Dict[str, sc.AnnData],
+        donor_map: Dict[str, str],
+        ground_truth_key: Optional[str] = None,
+        n_clusters: Optional[int] = None,
+    ) -> "pd.DataFrame":
+        """
+        Leave-One-Donor-Out (LODO) cross-validation.
+
+        For each donor D:
+          1. Hold out all slices from donor D
+          2. Train a fresh CauST model on remaining donors' slices
+          3. Apply training-derived causal gene selection to held-out slices
+          4. Evaluate domain prediction quality on held-out slices
+
+        This is the gold-standard validation for cross-donor generalization.
+        If CauST's selected genes are truly causal (not donor-specific),
+        domain prediction should remain accurate on unseen donors.
+
+        Parameters
+        ----------
+        slices           : dict {slice_id: AnnData}
+        donor_map        : dict {slice_id: donor_id}
+        ground_truth_key : obs column with ground-truth domain labels (optional)
+        n_clusters       : override self.n_clusters if provided
+
+        Returns
+        -------
+        pd.DataFrame with columns: fold, test_donor, test_slice,
+                                   lodo_ari, lodo_nmi, lodo_silhouette
+        """
+        import pandas as pd
+        from caust.evaluate.metrics import evaluate_single_slice
+
+        if n_clusters is not None:
+            self.n_clusters = n_clusters
+
+        slice_ids = list(slices.keys())
+        splits = lodo_splits(slice_ids, donor_map)
+        all_results: List[Dict] = []
+
+        for fold_idx, (train_ids, test_ids) in enumerate(splits):
+            test_donor = donor_map.get(test_ids[0], "Unknown") if test_ids else "Unknown"
+            self._log(
+                f"\n── LODO fold {fold_idx + 1}/{len(splits)}: "
+                f"held-out donor = {test_donor} ──"
+            )
+
+            # Build train slice dict
+            train_slices = {s: slices[s].copy() for s in train_ids}
+            train_donor_map = {s: donor_map[s] for s in train_ids if s in donor_map}
+
+            # Train a fresh model on training donors only
+            fold_model = CauST(
+                n_causal_genes = self.n_causal_genes,
+                alpha          = self.alpha,
+                n_clusters     = self.n_clusters,
+                hidden_dim     = self.hidden_dim,
+                latent_dim     = self.latent_dim,
+                epochs         = self.epochs,
+                lr             = self.lr,
+                n_neighbors    = self.n_neighbors,
+                filter_mode    = self.filter_mode,
+                scoring_method = self.scoring_method,
+                intervention   = self.intervention,
+                device         = self.device,
+                random_state   = self.random_state,
+                verbose        = self.verbose,
+            )
+            fold_model.fit_multi_slice(train_slices, donor_map=train_donor_map)
+
+            # Evaluate on held-out test slices
+            for sid in test_ids:
+                adata_out = fold_model.transform(slices[sid].copy())
+
+                labels_pred = adata_out.obs["caust_domain"].astype(int).values
+                latent_Z    = adata_out.obsm["caust_latent"]
+
+                labels_true = None
+                if ground_truth_key and ground_truth_key in slices[sid].obs.columns:
+                    labels_true = slices[sid].obs.loc[
+                        adata_out.obs_names, ground_truth_key
+                    ].values
+
+                metrics = evaluate_single_slice(
+                    labels_pred, latent_Z, labels_true, prefix="lodo_"
+                )
+                metrics["fold"]        = fold_idx
+                metrics["test_donor"]  = test_donor
+                metrics["test_slice"]  = sid
+                all_results.append(metrics)
+
+                self._log(
+                    f"  {sid}: ARI={metrics.get('lodo_ari', float('nan')):.4f}  "
+                    f"NMI={metrics.get('lodo_nmi', float('nan')):.4f}  "
+                    f"Sil={metrics.get('lodo_silhouette', float('nan')):.4f}"
+                )
+
+        df = pd.DataFrame(all_results)
+        self._lodo_results = df
+
+        # Summary
+        if not df.empty:
+            self._log("\n── LODO Summary ──")
+            for col in ["lodo_ari", "lodo_nmi", "lodo_silhouette"]:
+                if col in df.columns:
+                    self._log(
+                        f"  Mean {col}: {df[col].mean():.4f} "
+                        f"± {df[col].std():.4f}"
+                    )
+
+        return df
 
     # -----------------------------------------------------------------------
     # Inspection helpers
