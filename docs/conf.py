@@ -1,7 +1,7 @@
 # Configuration file for the Sphinx documentation builder.
 
 project = 'CauST'
-copyright = '2025, Pratham Makhija'
+copyright = '2025-2026, Pratham Makhija'
 author = 'Pratham Makhija'
 
 extensions = [

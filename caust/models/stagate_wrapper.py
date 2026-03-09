@@ -13,7 +13,7 @@ Install
     # GraphST: see https://github.com/JinmiaoChenLab/GraphST
 """
 
-from typing import Optional
+from typing import List, Optional
 
 import scanpy as sc
 import torch

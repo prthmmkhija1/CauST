@@ -40,10 +40,10 @@ Save and reload a trained model
 
 .. code-block:: python
 
-   model.save("checkpoints/my_model.pt")
+   model.save("checkpoints/my_model/")
 
-   loaded = CauST.load("checkpoints/my_model.pt")
-   labels = loaded.predict(adata)
+   loaded = CauST.load("checkpoints/my_model/")
+   result = loaded.transform(adata)
 
 Multi-slice training
 --------------------
@@ -60,7 +60,7 @@ To train across multiple DLPFC slices with cross-slice invariance scoring:
    }
 
    model = CauST(n_causal_genes=500, n_clusters=7, epochs=500)
-   model.fit_multi(slices)
+   results = model.fit_multi_slice(slices)
 
 See the ``tutorials/`` folder for full worked examples, including STAGATE
 integration, cross-slice evaluation, and causal gene exploration.
