@@ -29,3 +29,4 @@ h5py>=3.8.0                  # .h5 and .h5ad I/O
 
 # Testing
 pytest>=7.3.0
+pytest-cov>=4.0

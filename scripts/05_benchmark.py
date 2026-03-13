@@ -179,6 +179,14 @@ def try_graphst(adata, n_clusters, device="cpu"):
         return None, None
 
 
+def _slice_to_dataset(slice_id: str) -> str:
+    """Map a slice identifier to its parent dataset name."""
+    dlpfc_prefixes = ("151", "P4_", "P6_", "P8_")
+    if any(slice_id.startswith(p) for p in dlpfc_prefixes):
+        return "DLPFC"
+    return slice_id          # MouseBrain, MouseOB, etc. are already dataset names
+
+
 def evaluate_and_record(df, adata, slice_id, variant, method, Z, labels, gt_key):
     """Evaluate metrics and save result row to CSV immediately."""
     if Z is None:
@@ -187,7 +195,12 @@ def evaluate_and_record(df, adata, slice_id, variant, method, Z, labels, gt_key)
     if gt_key and gt_key in adata.obs.columns:
         labels_true = adata.obs[gt_key].values
     m = evaluate_single_slice(labels, Z, labels_true, prefix="")
-    m.update({"slice": slice_id, "variant": variant, "method": method})
+    m.update({
+        "slice": slice_id,
+        "variant": variant,
+        "method": method,
+        "dataset": _slice_to_dataset(slice_id),
+    })
     print(f"    ✓ {variant}/{method}: "
           f"ARI={m.get('ari', float('nan')):.4f}  "
           f"Sil={m.get('silhouette', float('nan')):.4f}")
@@ -216,9 +229,15 @@ def main():
 
     dlpfc_dir = ROOT / "data" / "processed" / "DLPFC"
     if dlpfc_dir.exists():
-        slices = sorted(p.stem for p in dlpfc_dir.glob("*.h5ad"))[:4]
+        slices = sorted(p.stem for p in dlpfc_dir.glob("*.h5ad"))
         for sid in slices:
-            jobs.append((dlpfc_dir / f"{sid}.h5ad", sid, N_CLUSTERS_DLPFC, GROUND_TRUTH_KEY))
+            fpath = dlpfc_dir / f"{sid}.h5ad"
+            # Auto-detect ground truth: only set gt_key if column exists
+            _tmp = sc.read_h5ad(fpath, backed="r")
+            gt = GROUND_TRUTH_KEY if GROUND_TRUTH_KEY in _tmp.obs.columns else None
+            _tmp.file.close()
+            jobs.append((fpath, sid, N_CLUSTERS_DLPFC, gt))
+        print(f"  DLPFC: {len(slices)} slices, gt_key auto-detected per slice")
     else:
         print("  [WARN] No DLPFC processed data found — skipping.")
 

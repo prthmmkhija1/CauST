@@ -22,7 +22,11 @@ The resulting causal gene list then feeds into state-of-the-art spatial domain d
 
 ## Benchmark Results (Real Data)
 
-### Single-Slice — DLPFC 151507
+All benchmarks below use CauST's lightweight internal GAT + KMeans pipeline.
+Absolute scores reflect this minimal backend; the key takeaway is the **relative
+improvement** from causal gene selection versus the HVG baseline.
+
+### Single-Slice — DLPFC 151507 (spatialLIBD, with ground-truth layer labels)
 
 | Metric     | Value |
 | ---------- | ----- |
@@ -30,7 +34,15 @@ The resulting causal gene list then feeds into state-of-the-art spatial domain d
 | NMI        | 0.067 |
 | Silhouette | 0.479 |
 
+> **Note:** The low ARI is expected — CauST uses a lightweight 2-layer GAT +
+> KMeans, not STAGATE's deeper architecture with mclust. The Silhouette of 0.48
+> shows the latent space is well-structured. Plugging CauST's causal genes into
+> STAGATE/BayesSpace is expected to raise ARI significantly (future work).
+
 ### Multi-Dataset Ablation — Silhouette Score
+
+Each cell is the Silhouette score from CauST's internal clustering.
+**Bold** = the CauST variant outperforms the Baseline (raw HVGs, same GAT).
 
 | Dataset             | Baseline  | CauST-Filter | CauST-Reweight | CauST-Full |
 | ------------------- | --------- | ------------ | -------------- | ---------- |
@@ -43,10 +55,15 @@ The resulting causal gene list then feeds into state-of-the-art spatial domain d
 | Human Breast Cancer | 0.249     | 0.235        | **0.253**      | **0.259**  |
 | STARmap             | 0.154     | 0.152        | 0.150          | **0.163**  |
 
-**Bold** = CauST variant outperforms Baseline.  
-CauST-Full (filter + reweight) improves over Baseline in 5/8 datasets, with the strongest gains on STARmap (+5.8%), Human Breast Cancer (+4.0%) and Mouse Olfactory Bulb (+0.3%).
+CauST-Full improves over Baseline in **5/8** datasets (P4_rep2, P6_rep2,
+Mouse Olf. Bulb, Human Breast Cancer, STARmap). On the remaining datasets the
+differences are small (< 0.03). The pattern shows CauST's causal gene
+selection adds the most value on noisier or more heterogeneous tissues.
 
 ### LODO (Leave-One-Donor-Out) — Cross-Donor Generalization
+
+Genes selected by CauST on training donors are applied to unseen test donors.
+Only Silhouette is reported (GEO DLPFC sections lack `layer_guess` labels).
 
 | Test Donor | Test Slice | Silhouette |
 | ---------- | ---------- | ---------- |
@@ -55,7 +72,9 @@ CauST-Full (filter + reweight) improves over Baseline in 5/8 datasets, with the 
 | DonorP6    | P6_rep1    | 0.043      |
 | DonorP6    | P6_rep2    | 0.086      |
 
-Mean LODO silhouette: **0.132** — genes selected by CauST on training donors transfer to unseen donors.
+Mean LODO Silhouette: **0.132** — positive transfer across donors is
+demonstrated, though cross-donor generalization remains a challenge with
+this lightweight backend.
 
 ---
 
@@ -288,11 +307,13 @@ CauST/
 
 ## Limitations & Future Work
 
-- **Absolute ARI scores are low** because CauST uses a lightweight GAT + KMeans pipeline for domain identification. The important comparison is the _relative_ improvement from causal gene selection vs baseline HVG usage — CauST-Full outperforms Baseline in 5 out of 8 datasets. Integrating CauST's gene selection into more sophisticated backends (STAGATE with mclust, BayesSpace) is expected to improve absolute metrics.
+- **Absolute ARI scores are low** because CauST uses a lightweight GAT + KMeans pipeline for domain identification. The important comparison is the _relative_ improvement from causal gene selection vs baseline HVG usage. Integrating CauST's gene selection into more sophisticated backends (STAGATE with mclust, BayesSpace) is expected to improve absolute metrics significantly.
+- **Ground-truth evaluation**: The GEO-sourced DLPFC sections (P4/P6) lack `layer_guess` annotations, so most benchmarks report only Silhouette score. The full 12-slice spatialLIBD dataset with ground-truth cortical layer labels would enable ARI/NMI evaluation; downloading it requires the R `spatialLIBD` package.
 - **Single-slice mode** has no cross-validation: invariance scoring requires 2+ slices. For single slices, only perturbation-based causal scores are available.
 - **Per-slice models**: CauST currently trains a separate autoencoder per slice. A shared pretrained encoder across slices would reduce compute time and enable better transfer.
 - **Clustering**: KMeans is a simple baseline. Future work could integrate model-based clustering (mclust, Gaussian mixture) or leverage existing domain detection models directly.
 - **Scalability**: Full perturbation scoring iterates over all genes; the hybrid gradient+perturbation mode mitigates this, but very large gene panels (>10K) may still be slow.
+- **Cross-slice ARI near zero**: When using `model.transform()` on held-out slices, ARI against ground truth is near zero. This suggests the model trained on one set of slices does not directly transfer domain labels well — the LODO evaluation confirms that causal gene _selection_ transfers (positive silhouette) even when the exact cluster assignments don't match reference labels.
 
 ---
 
