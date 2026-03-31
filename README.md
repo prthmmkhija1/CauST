@@ -62,13 +62,13 @@ python scripts/06_visualize_results.py
 ---
 
 ## Key Results
-### Top-10 Causal Genes (DLPFC Slice 151507)
+### Top-10 Invariant Genes (Cross-Donor DLPFC)
 ![Top-10 Causal Genes](images/top_10_causal_genes.png)
-_Normalized causal scores for top-10 genes identified by CauST. MOBP shows the highest causal score (0.0589), followed by PCP4 (0.0542) and SNAP25 (0.0510). These genes demonstrate the strongest influence on spatial domain structure. Mean causal score: 0.0460._
+_Normalized invariance scores for top-10 genes identified by CauST across multiple DLPFC donors. AC005332.8, ADAM11, HOXC5, and IGSF1 show the highest invariance scores (1.0), followed by AC073352.1 (0.956) and PENK (0.901). These genes demonstrate consistent causal influence on spatial domain structure across donors._
 
 ### Spatial Domain Identification Results
 ![Spatial Domain Results](images/spatial_domain_identification.png)
-_CauST successfully identifies seven distinct cortical layers in DLPFC slice 151507 with quantified accuracy metrics: ARI = 0.854, NMI = 0.713, Silhouette = 0.165. Color-coded regions represent identified tissue domains from Layer 1 through White Matter._
+_CauST identifies spatial domains in DLPFC slice 151507. Current metrics: Silhouette = 0.479. Note: ARI/NMI evaluation requires ground-truth layer annotations from the full spatialLIBD R package download. Color-coded regions represent identified tissue domains._
 
 ---
 
@@ -112,12 +112,13 @@ CauST functions as a plug-in preprocessing layer:
 
 ### Single Slice Evaluation (DLPFC 151507)
 
-| Method | Backend | ARI | NMI | Silhouette |
-|--------|---------|-----|-----|-----------|
-| CauST-internal | GAT + KMeans | 0.854 | 0.713 | 0.165 |
-| STAGATE | Deep GAT + mclust | 0.520 | 0.600 | — |
-| GraphST | Contrastive GNN | 0.590 | 0.640 | — |
-| **CauST → STAGATE** | **CauST genes + STAGATE** | **0.687** | **0.678** | — |
+| Method | Backend | Silhouette | ARI | NMI |
+|--------|---------|-----------|-----|-----|
+| CauST-internal | GAT + KMeans | **0.479** | — | — |
+| STAGATE (published) | Deep GAT + mclust | — | 0.520 | 0.600 |
+| GraphST (published) | Contrastive GNN | — | 0.590 | 0.640 |
+
+_Note: ARI/NMI for CauST-internal requires ground-truth layer annotations from spatialLIBD R package. Published STAGATE/GraphST values are from original papers on the same slice._
 
 ### Multi-Dataset Ablation (Silhouette Score)
 
@@ -132,7 +133,7 @@ CauST functions as a plug-in preprocessing layer:
 | Human Breast Cancer | 0.249 | 0.235 | **0.253** | **0.259** |
 | STARmap | 0.154 | 0.152 | 0.150 | **0.163** |
 
-**Summary**: CauST-Full improves baseline in 62.5% of datasets (5/8). CauST preprocessing significantly boosts STAGATE performance on DLPFC 151507.
+**Summary**: CauST-Full improves baseline in 4/8 datasets (50%). Best improvements on P4_rep2 (+16%), Human Breast Cancer (+4%), and STARmap (+6%).
 
 ### Cross-Donor Generalization (LODO)
 
@@ -170,7 +171,7 @@ CauST/
 │   ├── configs/             YAML experiment configs
 │   └── results/             Generated outputs
 ├── tutorials/               ← Jupyter notebooks
-├── tests/                   ← 36 pytest tests
+├── tests/                   ← 62 pytest tests
 └── docs/                    Sphinx documentation
 ```
 
@@ -207,7 +208,7 @@ CauST/
 | 2 | Identify stable cross-slice genes | Complete | `caust/causal/invariance.py` |
 | 3 | Filter / reweight genes | Complete | `caust/filter/gene_filter.py` |
 | 4 | Integrate with STAGATE/GraphST | **Wrappers complete** | `caust/models/stagate_wrapper.py` |
-| 5 | Benchmark across datasets | **Silhouette done; ARI pending GPU** | `scripts/05_benchmark.py` |
+| 5 | Benchmark across datasets | **Silhouette done; ARI pending ground-truth labels** | `scripts/05_benchmark.py` |
 
 ---
 
