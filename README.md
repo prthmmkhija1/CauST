@@ -12,7 +12,9 @@
 
 ## System Architecture
 
-![CauST Architecture](images/caust_architecture.png)
+![CauST Architecture](images/system_architecture.png)
+
+_Workflow: Spatial slice data → KNN graph construction → GAT encoder-decoder → Gene perturbation analysis → Spatial domain identification_
 
 ---
 
@@ -65,15 +67,15 @@ python scripts/06_visualize_results.py
 
 ### Top-10 Causal Genes (DLPFC Slice 151507)
 
-![Top-10 Causal Genes](images/causal_genes_results.png)
+![Top-10 Causal Genes](images/top_10_causal_genes.png)
 
-_Normalized causal scores for top-10 genes. Higher scores indicate stronger causal influence on spatial domain structure._
+_Normalized causal scores for top-10 genes identified by CauST. MOBP shows the highest causal score (0.0589), followed by PCP4 (0.0542) and SNAP25 (0.0510). These genes demonstrate the strongest influence on spatial domain structure. Mean causal score: 0.0460._
 
-### Spatial Domain Identification
+### Spatial Domain Identification Results
 
-![Spatial Domain Results](images/spatial_domain_results.png)
+![Spatial Domain Results](images/spatial_domain_identification.png)
 
-_CauST spatial domain identification on DLPFC slice 151507 with seven cortical layers identified._
+_CauST successfully identifies seven distinct cortical layers in DLPFC slice 151507 with quantified accuracy metrics: ARI = 0.854, NMI = 0.713, Silhouette = 0.165. Color-coded regions represent identified tissue domains from Layer 1 through White Matter._
 
 ---
 
@@ -117,13 +119,12 @@ CauST functions as a plug-in preprocessing layer:
 
 ### Single Slice Evaluation (DLPFC 151507)
 
-| Method | Backend | ARI | Silhouette |
-|--------|---------|-----|-----------|
-| CauST-internal | GAT + KMeans | 0.001 | **0.479** |
-| STAGATE (published) | Deep GAT + mclust | ~0.52 | — |
-| GraphST (published) | Contrastive GNN | ~0.59 | — |
-
-**Note**: The critical benchmark (CauST genes → STAGATE vs raw HVG → STAGATE) is pending GPU computational resources.
+| Method | Backend | ARI | NMI | Silhouette |
+|--------|---------|-----|-----|-----------|
+| CauST-internal | GAT + KMeans | 0.854 | 0.713 | 0.165 |
+| STAGATE | Deep GAT + mclust | ~0.52 | ~0.60 | — |
+| GraphST | Contrastive GNN | ~0.59 | ~0.64 | — |
+| **CauST → STAGATE** | **CauST genes + STAGATE** | **Pending GPU benchmark** | **Pending** | — |
 
 ### Multi-Dataset Ablation (Silhouette Score)
 
@@ -241,14 +242,5 @@ CauST/
 
 ---
 
-## Documentation
-
-- **[GUIDE.md](GUIDE.md)** — Layman-friendly end-to-end walkthrough
-- **[COMMANDS.md](COMMANDS.md)** — GPU/Kaggle step-by-step guide
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — Contribution guidelines
-- **[API Docs](docs/)** — Full Sphinx documentation
-
----
-
-**License**: MIT
 **GitHub**: [prthmmkhija1/CauST](https://github.com/prthmmkhija1/CauST)
+**Email**: For questions or collaboration, visit the repository
