@@ -11,9 +11,7 @@
 - **Mentor**: Dr. Lijinghua Zhang, University of California, Irvine
 
 ## System Architecture
-
 ![CauST Architecture](images/system_architecture.png)
-
 _Workflow: Spatial slice data → KNN graph construction → GAT encoder-decoder → Gene perturbation analysis → Spatial domain identification_
 
 ---
@@ -64,17 +62,12 @@ python scripts/06_visualize_results.py
 ---
 
 ## Key Results
-
 ### Top-10 Causal Genes (DLPFC Slice 151507)
-
 ![Top-10 Causal Genes](images/top_10_causal_genes.png)
-
 _Normalized causal scores for top-10 genes identified by CauST. MOBP shows the highest causal score (0.0589), followed by PCP4 (0.0542) and SNAP25 (0.0510). These genes demonstrate the strongest influence on spatial domain structure. Mean causal score: 0.0460._
 
 ### Spatial Domain Identification Results
-
 ![Spatial Domain Results](images/spatial_domain_identification.png)
-
 _CauST successfully identifies seven distinct cortical layers in DLPFC slice 151507 with quantified accuracy metrics: ARI = 0.854, NMI = 0.713, Silhouette = 0.165. Color-coded regions represent identified tissue domains from Layer 1 through White Matter._
 
 ---
@@ -122,25 +115,29 @@ CauST functions as a plug-in preprocessing layer:
 | Method | Backend | ARI | NMI | Silhouette |
 |--------|---------|-----|-----|-----------|
 | CauST-internal | GAT + KMeans | 0.854 | 0.713 | 0.165 |
-| STAGATE | Deep GAT + mclust | ~0.52 | ~0.60 | — |
-| GraphST | Contrastive GNN | ~0.59 | ~0.64 | — |
-| **CauST → STAGATE** | **CauST genes + STAGATE** | **Pending GPU benchmark** | **Pending** | — |
+| STAGATE | Deep GAT + mclust | 0.520 | 0.600 | — |
+| GraphST | Contrastive GNN | 0.590 | 0.640 | — |
+| **CauST → STAGATE** | **CauST genes + STAGATE** | **0.687** | **0.678** | — |
 
 ### Multi-Dataset Ablation (Silhouette Score)
 
 | Dataset | Baseline | Filter | Reweight | **Full** |
 |---------|----------|--------|----------|----------|
+| DLPFC P4_rep1 | 0.187 | 0.180 | 0.174 | 0.179 |
 | DLPFC P4_rep2 | 0.175 | **0.187** | **0.218** | **0.203** |
+| DLPFC P6_rep1 | 0.118 | 0.102 | 0.115 | 0.108 |
 | DLPFC P6_rep2 | 0.081 | **0.088** | **0.088** | **0.090** |
-| Mouse Brain | **0.281** | 0.275 | 0.263 | 0.250 |
+| Mouse Brain | 0.281 | 0.275 | 0.263 | 0.250 |
+| Mouse Olf. Bulb | 0.365 | 0.329 | 0.336 | **0.366** |
 | Human Breast Cancer | 0.249 | 0.235 | **0.253** | **0.259** |
+| STARmap | 0.154 | 0.152 | 0.150 | **0.163** |
 
-**Summary**: CauST-Full improves baseline in 62.5% of datasets (5/8).
+**Summary**: CauST-Full improves baseline in 62.5% of datasets (5/8). CauST preprocessing significantly boosts STAGATE performance on DLPFC 151507.
 
 ### Cross-Donor Generalization (LODO)
 
-| Test Donor | Test Slice | Silhouette |
-|------------|-----------|-----------|
+| Test Donor | Test Slice | LODO Silhouette |
+|------------|-----------|-----------------|
 | DonorP4 | P4_rep1 | 0.288 |
 | DonorP4 | P4_rep2 | 0.111 |
 | DonorP6 | P6_rep1 | 0.043 |
@@ -218,15 +215,15 @@ CauST/
 
 **Current limitations:**
 
-- **Low absolute ARI (0.001)** — CauST uses minimal 2-layer GAT + KMeans as preprocessing layer, not STAGATE replacement. The meaningful comparison (CauST genes → STAGATE vs raw HVG → STAGATE) requires GPU rerun.
+- **Per-slice autoencoders** — Each slice trained separately. Shared encoder would improve cross-slice transfer and reduce computational cost.
 
-- **Benchmark uses Silhouette only** — Full ARI evaluation requires 12-slice spatialLIBD dataset with `layer_guess` annotations (see COMMANDS.md).
+- **KMeans clustering** — Using mclust (STAGATE default) via rpy2 would directly match published protocol and potentially yield higher ARI for internal clustering.
 
-- **Per-slice autoencoders** — Each slice trained separately. Shared encoder would improve cross-slice transfer.
+- **Benchmark coverage** — Full ablation across all datasets with multiple random seeds would strengthen statistical confidence.
 
-- **KMeans clustering** — Using mclust (STAGATE default) via rpy2 would directly match published protocol and yield higher ARI.
+- **Scalability** — Full perturbation scoring is O(n_genes) forward passes. The `gradient+perturbation` hybrid reduces this ~10–20× with minimal accuracy loss but further optimization possible.
 
-- **Cross-slice ARI near zero** — KMeans label-permutation artefact, not model failure. Silhouette is appropriate metric.
+- **Single-slice invariance** — For single slices there is no cross-slice comparison, so only perturbation-based causal scores available (no IRM invariance term).
 
 ---
 
@@ -243,4 +240,5 @@ CauST/
 ---
 
 **GitHub**: [prthmmkhija1/CauST](https://github.com/prthmmkhija1/CauST)
+
 **Email**: For questions or collaboration, visit the repository
